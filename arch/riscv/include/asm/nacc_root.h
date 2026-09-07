@@ -64,6 +64,7 @@ int nacc_root_build(struct nacc_root_build_result *result,
 void nacc_root_prepare(void);
 bool nacc_root_is_ready(void);
 const struct nacc_bootstrap_descriptor *nacc_root_descriptor_snapshot(void);
+const struct nacc_root_build_result *nacc_root_result_snapshot(void);
 #endif
 
 #endif /* _ASM_RISCV_NACC_ROOT_H */

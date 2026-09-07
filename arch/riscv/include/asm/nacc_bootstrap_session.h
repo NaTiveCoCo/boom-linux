@@ -78,6 +78,8 @@ void nacc_linux_bootstrap_enter(
 	const struct nacc_bootstrap_descriptor *descriptor,
 	const struct nacc_root_build_result *root);
 long nacc_linux_bootstrap_ready(struct pt_regs *regs);
+void nacc_linux_bootstrap_resume(void);
+void nacc_linux_bootstrap_complete(void) __noreturn;
 #endif
 
 #endif /* _ASM_RISCV_NACC_BOOTSTRAP_SESSION_H */

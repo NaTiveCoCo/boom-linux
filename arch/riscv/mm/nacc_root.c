@@ -100,6 +100,16 @@ const struct nacc_bootstrap_descriptor *nacc_root_descriptor_snapshot(void)
 	return &nacc_runtime_descriptor;
 }
 
+const struct nacc_root_build_result *nacc_root_result_snapshot(void)
+{
+	if (!nacc_root_is_ready() ||
+	    nacc_runtime_root.root_physical_address !=
+		    nacc_runtime_descriptor.control_root_l0.base ||
+	    !nacc_runtime_root.lower_ptp_count || !nacc_runtime_root.leaf_count)
+		panic("NACC runtime root result is unavailable");
+	return &nacc_runtime_root;
+}
+
 void __init nacc_root_prepare(void)
 {
 	const struct nacc_bootstrap_physical_layout *layout;
