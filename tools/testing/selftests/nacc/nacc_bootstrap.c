@@ -74,7 +74,7 @@ int main(void)
 	struct nacc_bootstrap_descriptor descriptor;
 	struct nacc_bootstrap_physical_layout layout;
 	struct nacc_bootstrap_agent_memory_state memory_state = {};
-	int plan = 71;
+	int plan = 80;
 
 	ksft_print_header();
 	ksft_set_plan(plan);
@@ -92,6 +92,36 @@ int main(void)
 				"valid descriptor is accepted");
 	report_contract(nacc_bootstrap_validate(NULL, sizeof(descriptor)) == -EINVAL,
 				"null descriptor is rejected");
+
+	initialize_physical_layout(&layout);
+	memset(&descriptor, 0xa5, sizeof(descriptor));
+	report_contract(nacc_bootstrap_descriptor_build(&descriptor, &layout, 7) == 0,
+				"descriptor builder accepts frozen layout");
+	report_contract(descriptor.bootstrap_sequence == 7,
+				"descriptor builder preserves sequence");
+	report_contract(descriptor.agent_virtual_base ==
+				NACC_BOOTSTRAP_AGENT_VIRTUAL_BASE,
+				"descriptor builder selects fixed Agent VA");
+	report_contract(descriptor.emergency_stack_virtual_top ==
+				NACC_BOOTSTRAP_EMERGENCY_VIRTUAL_BASE +
+				layout.emergency_stack.size,
+				"descriptor builder derives emergency top");
+	report_contract(nacc_bootstrap_physical_layout_match(
+					&descriptor, sizeof(descriptor), &layout) == 0,
+				"built descriptor exactly matches frozen layout");
+	report_contract(nacc_bootstrap_descriptor_build(
+					&descriptor, &layout, 0) == -EINVAL,
+				"descriptor builder rejects zero sequence");
+	report_contract(descriptor.bootstrap_sequence == 7,
+				"failed descriptor build preserves output");
+	report_contract(nacc_bootstrap_descriptor_build(
+					(struct nacc_bootstrap_descriptor *)&layout,
+					&layout, 1) == -EINVAL,
+				"descriptor builder rejects output alias");
+	layout.agent_region.size = 0;
+	report_contract(nacc_bootstrap_descriptor_build(
+					&descriptor, &layout, 1) == -EINVAL,
+				"descriptor builder rejects invalid layout");
 
 	descriptor.magic ^= 1;
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==

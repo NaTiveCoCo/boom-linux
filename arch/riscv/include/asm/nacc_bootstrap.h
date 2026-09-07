@@ -28,6 +28,13 @@
 #define NACC_BOOTSTRAP_DELEGATION_EXCEPTION_MASK 0x000000000000b1ffULL
 #define NACC_BOOTSTRAP_DELEGATION_INTERRUPT_MASK 0x0000000000000222ULL
 
+/* descriptor 的五个 user-half virtual range 使用互不相邻的固定 window。 */
+#define NACC_BOOTSTRAP_AGENT_VIRTUAL_BASE 0x0000000100000000ULL
+#define NACC_BOOTSTRAP_MAILBOX_VIRTUAL_BASE 0x0000000200000000ULL
+#define NACC_BOOTSTRAP_EMERGENCY_VIRTUAL_BASE 0x0000000300000000ULL
+#define NACC_BOOTSTRAP_POOL_VIRTUAL_BASE 0x0000000400000000ULL
+#define NACC_BOOTSTRAP_BITMAP_VIRTUAL_BASE 0x0000000500000000ULL
+
 #define NACC_BOOTSTRAP_DESCRIPTOR_V1_0_SIZE 184U
 #define NACC_BOOTSTRAP_DESCRIPTOR_V1_1_SIZE 216U
 
@@ -115,6 +122,10 @@ int nacc_bootstrap_physical_layout_match(
 	const struct nacc_bootstrap_descriptor *descriptor,
 	size_t descriptor_buffer_size,
 	const struct nacc_bootstrap_physical_layout *layout);
+int nacc_bootstrap_descriptor_build(
+	struct nacc_bootstrap_descriptor *descriptor,
+	const struct nacc_bootstrap_physical_layout *layout,
+	nacc_bootstrap_u64 bootstrap_sequence);
 
 /* 这些 validator 不依赖内核运行时状态，可由 host selftest 直接编译。 */
 int nacc_bootstrap_agent_memory_range_validate(nacc_bootstrap_u64 base,

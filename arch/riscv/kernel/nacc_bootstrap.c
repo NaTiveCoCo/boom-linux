@@ -110,6 +110,17 @@ static bool nacc_bootstrap_ranges_overlap(
 	       right->base < left->base + left->size;
 }
 
+static bool nacc_bootstrap_buffers_overlap(
+	const void *left, size_t left_size, const void *right, size_t right_size)
+{
+	uintptr_t left_base = (uintptr_t)left;
+	uintptr_t right_base = (uintptr_t)right;
+
+	if (left_base <= right_base)
+		return right_base - left_base < left_size;
+	return left_base - right_base < right_size;
+}
+
 static bool nacc_bootstrap_virtual_range_valid(
 	const struct nacc_bootstrap_range *range)
 {
@@ -368,6 +379,65 @@ int nacc_bootstrap_validate(const struct nacc_bootstrap_descriptor *descriptor,
 	if (descriptor->bitmap_backing.size < bitmap_storage_size)
 		return -EINVAL;
 
+	return 0;
+}
+
+int nacc_bootstrap_descriptor_build(
+	struct nacc_bootstrap_descriptor *descriptor,
+	const struct nacc_bootstrap_physical_layout *layout,
+	nacc_bootstrap_u64 bootstrap_sequence)
+{
+	struct nacc_bootstrap_descriptor candidate;
+	int ret;
+
+	if (!descriptor || ((uintptr_t)descriptor &
+			    (sizeof(nacc_bootstrap_u64) - 1)) ||
+	    !layout || nacc_bootstrap_buffers_overlap(
+			 descriptor, sizeof(*descriptor), layout, sizeof(*layout)) ||
+	    !bootstrap_sequence)
+		return -EINVAL;
+	ret = nacc_bootstrap_physical_layout_validate(layout);
+	if (ret)
+		return ret;
+	if (layout->emergency_stack.size >
+	    ~(nacc_bootstrap_u64)0 - NACC_BOOTSTRAP_EMERGENCY_VIRTUAL_BASE)
+		return -EOVERFLOW;
+
+	candidate = (struct nacc_bootstrap_descriptor){
+		.magic = NACC_BOOTSTRAP_MAGIC,
+		.abi_major = NACC_BOOTSTRAP_ABI_MAJOR,
+		.abi_minor = NACC_BOOTSTRAP_ABI_MINOR,
+		.struct_size = NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE,
+		.feature_bits = NACC_BOOTSTRAP_FEATURES_V2,
+		.agent_region = layout->agent_region,
+		.bitmap_target = layout->bitmap_target,
+		.bitmap_backing = layout->bitmap_backing,
+		.nacc_pool = layout->nacc_pool,
+		.control_root_l0 = layout->control_root_l0,
+		.mailbox = layout->mailbox,
+		.emergency_stack = layout->emergency_stack,
+		.delegation_exception_mask =
+			NACC_BOOTSTRAP_DELEGATION_EXCEPTION_MASK,
+		.delegation_interrupt_mask =
+			NACC_BOOTSTRAP_DELEGATION_INTERRUPT_MASK,
+		.agent_virtual_base = NACC_BOOTSTRAP_AGENT_VIRTUAL_BASE,
+		.mailbox_virtual_base = NACC_BOOTSTRAP_MAILBOX_VIRTUAL_BASE,
+		.emergency_stack_virtual_top =
+			NACC_BOOTSTRAP_EMERGENCY_VIRTUAL_BASE +
+			layout->emergency_stack.size,
+		.bootstrap_sequence = bootstrap_sequence,
+		.nacc_pool_virtual_base = NACC_BOOTSTRAP_POOL_VIRTUAL_BASE,
+		.bitmap_backing_virtual_base =
+			NACC_BOOTSTRAP_BITMAP_VIRTUAL_BASE,
+	};
+	ret = nacc_bootstrap_validate(&candidate, sizeof(candidate));
+	if (ret)
+		return ret;
+	ret = nacc_bootstrap_physical_layout_match(
+		&candidate, sizeof(candidate), layout);
+	if (ret)
+		return ret;
+	*descriptor = candidate;
 	return 0;
 }
 
