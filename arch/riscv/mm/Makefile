@@ -16,6 +16,7 @@ obj-y += init.o
 obj-$(CONFIG_MMU) += extable.o fault.o pageattr.o
 obj-y += cacheflush.o
 obj-y += context.o
+obj-$(CONFIG_RISCV_NACC) += nacc_root.o nacc_root_core.o
 obj-y += pgtable.o
 obj-y += pmem.o
 

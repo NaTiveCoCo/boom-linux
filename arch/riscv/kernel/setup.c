@@ -275,7 +275,7 @@ void __init setup_arch(char **cmdline_p)
 	efi_init();
 	paging_init();
 #ifdef CONFIG_RISCV_NACC
-	/* reserved-memory callback 已完成；full capability 必须有可信 snapshot。 */
+	/* reserved-memory callback 已完成；先冻结 capability 与 physical layout。 */
 	nacc_bootstrap_sbi_probe();
 #endif
 

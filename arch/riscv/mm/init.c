@@ -28,6 +28,7 @@
 #include <asm/fixmap.h>
 #include <asm/io.h>
 #include <asm/nacc_bootstrap.h>
+#include <asm/nacc_root.h>
 #include <asm/numa.h>
 #include <asm/pgtable.h>
 #include <asm/ptdump.h>
@@ -44,14 +45,18 @@ EXPORT_SYMBOL(kernel_map);
 #endif
 
 #ifdef CONFIG_64BIT
-u64 satp_mode __ro_after_init = !IS_ENABLED(CONFIG_XIP_KERNEL) ? SATP_MODE_57 : SATP_MODE_39;
+u64 satp_mode __ro_after_init =
+	IS_ENABLED(CONFIG_RISCV_NACC) || IS_ENABLED(CONFIG_XIP_KERNEL) ?
+	SATP_MODE_39 : SATP_MODE_57;
 #else
 u64 satp_mode __ro_after_init = SATP_MODE_32;
 #endif
 EXPORT_SYMBOL(satp_mode);
 
-bool pgtable_l4_enabled = IS_ENABLED(CONFIG_64BIT) && !IS_ENABLED(CONFIG_XIP_KERNEL);
-bool pgtable_l5_enabled = IS_ENABLED(CONFIG_64BIT) && !IS_ENABLED(CONFIG_XIP_KERNEL);
+bool pgtable_l4_enabled = IS_ENABLED(CONFIG_64BIT) &&
+	!IS_ENABLED(CONFIG_XIP_KERNEL) && !IS_ENABLED(CONFIG_RISCV_NACC);
+bool pgtable_l5_enabled = IS_ENABLED(CONFIG_64BIT) &&
+	!IS_ENABLED(CONFIG_XIP_KERNEL) && !IS_ENABLED(CONFIG_RISCV_NACC);
 EXPORT_SYMBOL(pgtable_l4_enabled);
 EXPORT_SYMBOL(pgtable_l5_enabled);
 
@@ -776,8 +781,16 @@ early_param("no5lvl", print_no5lvl);
 static __init void set_satp_mode(uintptr_t dtb_pa)
 {
 	u64 identity_satp, hw_satp;
-	uintptr_t set_satp_mode_pmd = ((unsigned long)set_satp_mode) & PMD_MASK;
-	u64 satp_mode_cmdline = __pi_set_satp_mode_from_cmdline(dtb_pa);
+	uintptr_t set_satp_mode_pmd;
+	u64 satp_mode_cmdline;
+
+	if (IS_ENABLED(CONFIG_RISCV_NACC)) {
+		disable_pgtable_l5();
+		disable_pgtable_l4();
+		return;
+	}
+	set_satp_mode_pmd = ((unsigned long)set_satp_mode) & PMD_MASK;
+	satp_mode_cmdline = __pi_set_satp_mode_from_cmdline(dtb_pa);
 
 	if (satp_mode_cmdline == SATP_MODE_57) {
 		disable_pgtable_l5();
@@ -1567,5 +1580,7 @@ void __init pgtable_cache_init(void)
 	preallocate_pgd_pages_range(VMALLOC_START, VMALLOC_END, "vmalloc");
 	if (IS_ENABLED(CONFIG_MODULES))
 		preallocate_pgd_pages_range(MODULES_VADDR, MODULES_END, "bpf/modules");
+	if (IS_ENABLED(CONFIG_RISCV_NACC))
+		nacc_root_prepare();
 }
 #endif

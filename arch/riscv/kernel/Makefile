@@ -53,6 +53,7 @@ obj-y	+= sys_riscv.o
 obj-y	+= time.o
 obj-y	+= traps.o
 obj-$(CONFIG_RISCV_NACC) += nacc_bootstrap.o
+obj-$(CONFIG_RISCV_NACC) += nacc_agent_image.o
 obj-$(CONFIG_RISCV_NACC) += nacc_trap.o
 obj-y	+= riscv_ksyms.o
 obj-y	+= stacktrace.o
