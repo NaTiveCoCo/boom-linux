@@ -48,7 +48,8 @@ int nacc_linux_bootstrap_session_arm(
 	    !nacc_linux_session_satp_is_sv39(control_satp) ||
 	    !(old_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
 	    !(control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
-	    old_satp == control_satp)
+	    (old_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ==
+		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK))
 		return -EINVAL;
 	if (!__atomic_compare_exchange_n(
 		    &session->state, &expected, NACC_LINUX_SESSION_ARMING,

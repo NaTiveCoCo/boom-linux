@@ -118,6 +118,11 @@ static void test_arm_validation(void)
 			&session, TEST_CONTEXT, TEST_SEQUENCE, TEST_TP,
 			TEST_OLD_SATP, TEST_OLD_SATP) == -EINVAL,
 			 "identical old and control roots are rejected");
+	memset(&session, 0, sizeof(session));
+	report_contract(nacc_linux_bootstrap_session_arm(
+			&session, TEST_CONTEXT, TEST_SEQUENCE, TEST_TP,
+			TEST_OLD_SATP, TEST_OLD_SATP ^ (1ULL << 44)) == -EINVAL,
+			 "one root PPN with different ASIDs is rejected");
 }
 
 static void test_ready_validation(void)
@@ -199,7 +204,7 @@ static void test_failure_transition(void)
 int main(void)
 {
 	ksft_print_header();
-	ksft_set_plan(31);
+	ksft_set_plan(32);
 	report_contract(!nacc_linux_bootstrap_session_is_ready(NULL),
 			 "NULL session is never READY");
 	test_arm_validation();
