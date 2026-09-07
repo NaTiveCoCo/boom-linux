@@ -52,5 +52,9 @@ SYM_CODE_START(riscv_crash_save_regs)
 	REG_S t2, PT_EPC(a0)
 	REG_S t3, PT_BADADDR(a0)
 	REG_S t4, PT_CAUSE(a0)
+#ifdef CONFIG_RISCV_NACC
+	csrr t1, CSR_ASSTATUS
+	REG_S t1, PT_ASSTATUS(a0)
+#endif
 	ret
 SYM_CODE_END(riscv_crash_save_regs)

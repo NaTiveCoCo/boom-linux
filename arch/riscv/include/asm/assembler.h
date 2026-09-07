@@ -28,6 +28,10 @@
 		csrw	CSR_TVAL, t0
 		REG_L	t0, (SUSPEND_CONTEXT_REGS + PT_CAUSE)(a0)
 		csrw	CSR_CAUSE, t0
+#ifdef CONFIG_RISCV_NACC
+		REG_L	t0, (SUSPEND_CONTEXT_REGS + PT_ASSTATUS)(a0)
+		csrw	CSR_ASSTATUS, t0
+#endif
 	.endm
 
 /*

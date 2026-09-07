@@ -6,14 +6,13 @@
 menu "Misc devices"
 
 config NACC
-	tristate "NACC confidential container control device"
-	depends on RISCV && 64BIT
+	bool "NACC confidential container control device"
+	depends on RISCV && 64BIT && MMU && !RISCV_M_MODE
+	select RISCV_NACC
 	help
 	  提供 `/dev/nacc` versioned control UAPI。当前实现只公布 ABI
 	  discovery capability；Agent lifecycle 与 exec prepare backend 未接入时，
 	  对应 ioctl 必须返回明确错误，不能把 required workload 降级为普通执行。
-
-	  若编译为 module，module 名称为 nacc。
 
 config SENSORS_LIS3LV02D
 	tristate

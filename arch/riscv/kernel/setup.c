@@ -29,6 +29,7 @@
 #include <asm/cpu_ops.h>
 #include <asm/early_ioremap.h>
 #include <asm/pgtable.h>
+#include <asm/nacc_bootstrap.h>
 #include <asm/setup.h>
 #include <asm/set_memory.h>
 #include <asm/sections.h>
@@ -273,6 +274,10 @@ void __init setup_arch(char **cmdline_p)
 
 	efi_init();
 	paging_init();
+#ifdef CONFIG_RISCV_NACC
+	/* reserved-memory callback 已完成；full capability 必须有可信 snapshot。 */
+	nacc_bootstrap_sbi_probe();
+#endif
 
 	/* Parse the ACPI tables for possible boot-time configuration */
 	acpi_boot_table_init();

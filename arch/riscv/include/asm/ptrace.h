@@ -51,6 +51,10 @@ struct pt_regs {
 	unsigned long cause;
 	/* a0 value before the syscall */
 	unsigned long orig_a0;
+#ifdef CONFIG_RISCV_NACC
+	/* 每层 S-side trap 独立保存 SPA，避免嵌套 trap 覆盖返回 world。 */
+	unsigned long asstatus;
+#endif
 };
 
 #define PTRACE_SYSEMU			0x1f

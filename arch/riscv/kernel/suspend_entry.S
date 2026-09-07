@@ -51,6 +51,10 @@ ENTRY(__cpu_suspend_enter)
 	REG_S	t0, (SUSPEND_CONTEXT_REGS + PT_BADADDR)(a0)
 	csrr	t0, CSR_CAUSE
 	REG_S	t0, (SUSPEND_CONTEXT_REGS + PT_CAUSE)(a0)
+#ifdef CONFIG_RISCV_NACC
+	csrr	t0, CSR_ASSTATUS
+	REG_S	t0, (SUSPEND_CONTEXT_REGS + PT_ASSTATUS)(a0)
+#endif
 
 	/* Return non-zero value */
 	li	a0, 1

@@ -27,6 +27,7 @@
 
 #include <asm/fixmap.h>
 #include <asm/io.h>
+#include <asm/nacc_bootstrap.h>
 #include <asm/numa.h>
 #include <asm/pgtable.h>
 #include <asm/ptdump.h>
@@ -259,6 +260,10 @@ static void __init setup_bootmem(void)
 	 * in the device tree, otherwise the allocation could end up in a
 	 * reserved region.
 	 */
+#ifdef CONFIG_RISCV_NACC
+	/* malformed NACC compatible node 在通用 callback 前直接 fail-stop。 */
+	nacc_bootstrap_memory_preflight();
+#endif
 	early_init_fdt_scan_reserved_mem();
 
 	/*

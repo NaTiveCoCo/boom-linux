@@ -115,6 +115,10 @@ void start_thread(struct pt_regs *regs, unsigned long pc,
 	unsigned long sp)
 {
 	regs->status = SR_PIE;
+#ifdef CONFIG_RISCV_NACC
+	/* exec 构造普通 U-mode frame，不得继承旧 AS return 的 SPA。 */
+	regs->asstatus = 0;
+#endif
 #ifdef CONFIG_RISCV_ROCC
 	regs->status |= SR_XS_INITIAL;
 #endif

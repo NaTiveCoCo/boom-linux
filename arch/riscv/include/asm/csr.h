@@ -106,6 +106,11 @@
 #define EXC_LOAD_GUEST_PAGE_FAULT	21
 #define EXC_VIRTUAL_INST_FAULT		22
 #define EXC_STORE_GUEST_PAGE_FAULT	23
+#define EXC_AS_ECALL			24
+
+/* NACC A-mode custom CSR；S-mode 只能观察和写入 SPA。 */
+#define CSR_ASSTATUS		0x7c2
+#define SR_ASSTATUS_SPA		_AC(0x2, UL)
 
 /* PMP configuration */
 #define PMP_R			0x01

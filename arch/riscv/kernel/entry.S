@@ -59,12 +59,18 @@ _save_context:
 	csrr s3, CSR_TVAL
 	csrr s4, CSR_CAUSE
 	csrr s5, CSR_SCRATCH
+#ifdef CONFIG_RISCV_NACC
+	csrr s6, CSR_ASSTATUS
+#endif
 	REG_S s0, PT_SP(sp)
 	REG_S s1, PT_STATUS(sp)
 	REG_S s2, PT_EPC(sp)
 	REG_S s3, PT_BADADDR(sp)
 	REG_S s4, PT_CAUSE(sp)
 	REG_S s5, PT_TP(sp)
+#ifdef CONFIG_RISCV_NACC
+	REG_S s6, PT_ASSTATUS(sp)
+#endif
 
 	/*
 	 * Set the scratch register to 0, so that if a recursive exception
@@ -117,7 +123,16 @@ SYM_CODE_START_NOALIGN(ret_from_exception)
 #else
 	andi s0, s0, SR_SPP
 #endif
+	/* AS 的 nominal privilege 也是 S；SPA=1 时仍需走 user-like scratch 路径。 */
+#ifdef CONFIG_RISCV_NACC
+	beqz s0, 2f
+	REG_L s1, PT_ASSTATUS(sp)
+	andi s1, s1, SR_ASSTATUS_SPA
+	beqz s1, 1f
+2:
+#else
 	bnez s0, 1f
+#endif
 
 	/* Save unwound kernel stack pointer in thread_info */
 	addi s0, sp, PT_SIZE_ON_STACK
@@ -151,6 +166,10 @@ SYM_CODE_START_NOALIGN(ret_from_exception)
 	REG_SC x0, a2, PT_EPC(sp)
 
 	csrw CSR_STATUS, a0
+#ifdef CONFIG_RISCV_NACC
+	REG_L a1, PT_ASSTATUS(sp)
+	csrw CSR_ASSTATUS, a1
+#endif
 	csrw CSR_EPC, a2
 
 	REG_L x1,  PT_RA(sp)
@@ -251,6 +270,10 @@ restore_caller_reg:
 	REG_S s3, PT_BADADDR(sp)
 	REG_S s4, PT_CAUSE(sp)
 	REG_S s5, PT_TP(sp)
+#ifdef CONFIG_RISCV_NACC
+	csrr t0, CSR_ASSTATUS
+	REG_S t0, PT_ASSTATUS(sp)
+#endif
 	move a0, sp
 	tail handle_bad_stack
 SYM_CODE_END(handle_kernel_stack_overflow)
@@ -342,6 +365,20 @@ SYM_CODE_START(excp_vect_table)
 	RISCV_PTR do_page_fault   /* load page fault */
 	RISCV_PTR do_trap_unknown
 	RISCV_PTR do_page_fault   /* store page fault */
+	/* cause 16..23 当前没有 Linux handler。 */
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+	RISCV_PTR do_trap_unknown
+#ifdef CONFIG_RISCV_NACC
+	RISCV_PTR do_trap_ecall_as /* ECALL_FROM_AS */
+#else
+	RISCV_PTR do_trap_unknown
+#endif
 excp_vect_table_end:
 SYM_CODE_END(excp_vect_table)
 

@@ -40,6 +40,25 @@ enum sbi_ext_id {
 	SBI_EXT_VENDOR_END = 0x09FFFFFF,
 };
 
+/* NACC 是 OpenSBI firmware extension，使用 firmware-range extension ID。 */
+#define SBI_EXT_FIRMWARE_START			0x0A000000
+#define SBI_EXT_FIRMWARE_END			0x0AFFFFFF
+#define SBI_EXT_NACC				0x0A4E4143
+#define SBI_EXT_NACC_PROBE			0x0
+#define SBI_EXT_NACC_BOOTSTRAP			0x1
+#define SBI_EXT_NACC_GET_MEASUREMENT		0x2
+#define SBI_EXT_NACC_FATAL			0x3
+
+/* PROBE 只返回已经具备完整成功语义的 capability。 */
+#define SBI_EXT_NACC_CAP_PROBE			(1UL << 0)
+#define SBI_EXT_NACC_CAP_BOOTSTRAP		(1UL << 1)
+#define SBI_EXT_NACC_CAP_GET_MEASUREMENT	(1UL << 2)
+#define SBI_EXT_NACC_CAP_FATAL			(1UL << 3)
+#define SBI_EXT_NACC_CAP_ALL			(SBI_EXT_NACC_CAP_PROBE | \
+						 SBI_EXT_NACC_CAP_BOOTSTRAP | \
+						 SBI_EXT_NACC_CAP_GET_MEASUREMENT | \
+						 SBI_EXT_NACC_CAP_FATAL)
+
 enum sbi_ext_base_fid {
 	SBI_EXT_BASE_GET_SPEC_VERSION = 0,
 	SBI_EXT_BASE_GET_IMP_ID,

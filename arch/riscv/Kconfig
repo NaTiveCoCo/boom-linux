@@ -201,6 +201,10 @@ config RISCV_SBI
 	depends on !RISCV_M_MODE
 	default y
 
+config RISCV_NACC
+	bool
+	depends on 64BIT && MMU && RISCV_SBI
+
 config MMU
 	bool "MMU-based Paged Memory Management Support"
 	default y
