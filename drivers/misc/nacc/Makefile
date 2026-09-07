@@ -2,3 +2,4 @@
 
 obj-$(CONFIG_NACC) += nacc.o
 obj-$(CONFIG_NACC) += nacc_lifecycle_core.o
+obj-$(CONFIG_NACC) += nacc_objects.o

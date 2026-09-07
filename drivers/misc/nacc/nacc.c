@@ -16,10 +16,12 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 
+#include "nacc_internal.h"
+
 #define NACC_SUPPORTED_FEATURES NACC_UAPI_FEATURE_BASE
 
-static int nacc_validate_header(const struct nacc_uapi_header *header,
-				size_t user_size)
+int nacc_validate_header(const struct nacc_uapi_header *header,
+			 size_t user_size)
 {
 	if (header->struct_size != user_size)
 		return -EINVAL;
@@ -81,10 +83,21 @@ static long nacc_ioctl(struct file *file, unsigned int command,
 	case NACC_IOC_NR_GET_ABI:
 		return nacc_get_abi(user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_CREATE_AGENT:
+		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
+			return -EOPNOTSUPP;
+		return nacc_create_agent(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_PREPARE_EXEC:
+		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_PREPARE_EXEC))
+			return -EOPNOTSUPP;
+		return nacc_prepare_exec(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_QUERY_STATUS:
+		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_STATUS))
+			return -EOPNOTSUPP;
+		return nacc_query_status(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_DESTROY_AGENT:
-		return -EOPNOTSUPP;
+		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
+			return -EOPNOTSUPP;
+		return nacc_destroy_agent(file, user_argument, _IOC_SIZE(command));
 	default:
 		return -ENOTTY;
 	}
@@ -92,15 +105,26 @@ static long nacc_ioctl(struct file *file, unsigned int command,
 
 static int nacc_open(struct inode *inode, struct file *file)
 {
+	int ret;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-
+	ret = nacc_control_open(file);
+	if (ret)
+		return ret;
 	return nonseekable_open(inode, file);
+}
+
+static int nacc_release(struct inode *inode, struct file *file)
+{
+	(void)inode;
+	return nacc_control_release(file);
 }
 
 static const struct file_operations nacc_file_operations = {
 	.owner = THIS_MODULE,
 	.open = nacc_open,
+	.release = nacc_release,
 	.unlocked_ioctl = nacc_ioctl,
 	.compat_ioctl = compat_ptr_ioctl,
 	.llseek = no_llseek,
