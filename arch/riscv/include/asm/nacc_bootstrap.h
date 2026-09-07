@@ -66,8 +66,9 @@ struct nacc_bootstrap_agent_memory_state {
 
 /*
  * Linux 提供给 OpenSBI 的 runtime layout；所有 range 都是 physical range。
- * external emergency workspace 仅是未使用的 M/bootstrap non-secret reservation；
- * no-map 不代表 M-private 硬件保护，也不得把它加入 AS initial leaf set。
+ * external emergency workspace 仅供 single-hart M bootstrap callback 临时保存
+ * lower PTP audit list/bitmap；它不承载 secret 或长期可信 state，no-map 不代表
+ * M-private 硬件保护，也不得把它加入 AS initial leaf set。
  */
 struct nacc_bootstrap_descriptor {
 	nacc_bootstrap_u32 magic;
