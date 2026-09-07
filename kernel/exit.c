@@ -69,6 +69,7 @@
 #include <linux/rethook.h>
 #include <linux/sysfs.h>
 #include <linux/user_events.h>
+#include <linux/nacc_exec.h>
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
@@ -873,6 +874,7 @@ void __noreturn do_exit(long code)
 	exit_task_namespaces(tsk);
 	exit_task_work(tsk);
 	exit_thread(tsk);
+	nacc_exec_exit_current();
 
 	/*
 	 * Flush inherited counters to the parent - before the parent

@@ -28,6 +28,7 @@ enum nacc_lifecycle_exec_state {
 	NACC_LIFECYCLE_EXEC_EMPTY = 0,
 	NACC_LIFECYCLE_EXEC_PREPARED,
 	NACC_LIFECYCLE_EXEC_COMMITTED,
+	NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED,
 	NACC_LIFECYCLE_EXEC_ACTIVE,
 	NACC_LIFECYCLE_EXEC_EXITED,
 	NACC_LIFECYCLE_EXEC_FAILED,
@@ -78,6 +79,14 @@ int nacc_lifecycle_commit_exec(struct nacc_lifecycle_agent *agent,
 			       struct nacc_lifecycle_exec *transaction,
 			       nacc_lifecycle_u64 target_identity,
 			       nacc_lifecycle_u64 prepare_generation);
+int nacc_lifecycle_commit_reexec(struct nacc_lifecycle_agent *agent,
+				 struct nacc_lifecycle_exec *transaction,
+				 nacc_lifecycle_u64 target_identity,
+				 nacc_lifecycle_u64 *prepare_generation);
+int nacc_lifecycle_activate_reexec(struct nacc_lifecycle_agent *agent,
+				   struct nacc_lifecycle_exec *transaction,
+				   nacc_lifecycle_u64 target_identity,
+				   nacc_lifecycle_u64 prepare_generation);
 int nacc_lifecycle_activate(struct nacc_lifecycle_agent *agent,
 			    struct nacc_lifecycle_exec *transaction,
 			    nacc_lifecycle_u64 target_identity,

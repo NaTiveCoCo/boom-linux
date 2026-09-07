@@ -11,6 +11,7 @@
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/nacc.h>
+#include <linux/nacc_exec.h>
 #include <linux/nacc_lifecycle.h>
 #include <linux/pid.h>
 #include <linux/random.h>
@@ -36,6 +37,7 @@ struct nacc_prepare_object {
 	struct nacc_agent_object *agent;
 	struct task_struct *target;
 	struct nacc_lifecycle_exec lifecycle;
+	int post_ponr_errno;
 };
 
 static DEFINE_MUTEX(nacc_object_lock);
@@ -107,6 +109,8 @@ static int nacc_prepare_release(struct inode *inode, struct file *file)
 		kref_put(&prepare->reference, nacc_prepare_free);
 	} else if (prepare->lifecycle.state !=
 			   NACC_LIFECYCLE_EXEC_COMMITTED &&
+		   prepare->lifecycle.state !=
+			   NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED &&
 		   prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_ACTIVE &&
 		   prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EXITED &&
 		   prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_FAILED &&
@@ -148,6 +152,171 @@ static int nacc_match_control_agent(const struct nacc_control *control,
 	    control->agent->lifecycle.agent_generation != generation)
 		return -ESTALE;
 	return 0;
+}
+
+static struct nacc_prepare_object *nacc_find_prepare_locked(
+	const struct task_struct *target)
+{
+	struct nacc_prepare_object *prepare;
+
+	list_for_each_entry(prepare, &nacc_prepare_objects, list) {
+		if (prepare->target == target)
+			return prepare;
+	}
+	return NULL;
+}
+
+int nacc_exec_commit_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	int ret = 0;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED)
+		ret = nacc_lifecycle_commit_exec(
+			&prepare->agent->lifecycle, &prepare->lifecycle,
+			nacc_target_identity(current),
+			prepare->lifecycle.prepare_generation);
+	else if (prepare &&
+		 prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		ret = nacc_lifecycle_commit_reexec(
+			&prepare->agent->lifecycle, &prepare->lifecycle,
+			nacc_target_identity(current),
+			&prepare->lifecycle.prepare_generation);
+		if (!ret)
+			prepare->post_ponr_errno = 0;
+	} else if (prepare) {
+		panic("NACC exec commit found invalid transaction state");
+	}
+	mutex_unlock(&nacc_object_lock);
+	return ret;
+}
+
+bool nacc_exec_abort_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	int ret;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return false;
+	}
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		mutex_unlock(&nacc_object_lock);
+		return false;
+	}
+	ret = nacc_lifecycle_abort_prepare(
+		&prepare->agent->lifecycle, &prepare->lifecycle,
+		nacc_target_identity(current),
+		prepare->lifecycle.prepare_generation);
+	if (ret)
+		panic("NACC exec pre-PONR abort failed (%d)", ret);
+	list_del_init(&prepare->list);
+	nacc_finish_destroy_if_drained(prepare->agent);
+	mutex_unlock(&nacc_object_lock);
+	kref_put(&prepare->reference, nacc_prepare_free);
+	return true;
+}
+
+void nacc_exec_activate_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	int ret;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return;
+	}
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED)
+		ret = nacc_lifecycle_activate(
+			&prepare->agent->lifecycle, &prepare->lifecycle,
+			nacc_target_identity(current),
+			prepare->lifecycle.prepare_generation);
+	else if (prepare->lifecycle.state ==
+		 NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED)
+		ret = nacc_lifecycle_activate_reexec(
+			&prepare->agent->lifecycle, &prepare->lifecycle,
+			nacc_target_identity(current),
+			prepare->lifecycle.prepare_generation);
+	else
+		panic("NACC exec activation found invalid transaction state");
+	if (ret)
+		panic("NACC exec activation failed (%d)", ret);
+	mutex_unlock(&nacc_object_lock);
+}
+
+void nacc_exec_record_failure_current(int failure_errno)
+{
+	struct nacc_prepare_object *prepare;
+
+	if (failure_errno <= 0)
+		panic("NACC exec recorded invalid failure errno");
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (prepare) {
+		if ((prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_COMMITTED &&
+		     prepare->lifecycle.state !=
+			     NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED) ||
+		    prepare->post_ponr_errno)
+			panic("NACC exec failure found invalid transaction state");
+		prepare->post_ponr_errno = failure_errno;
+	}
+	mutex_unlock(&nacc_object_lock);
+}
+
+void nacc_exec_exit_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	u64 generation;
+	u64 target;
+	int ret;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return;
+	}
+	target = nacc_target_identity(current);
+	generation = prepare->lifecycle.prepare_generation;
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
+		ret = nacc_lifecycle_abort_prepare(&prepare->agent->lifecycle,
+						   &prepare->lifecycle,
+						   target, generation);
+	} else if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED ||
+		   prepare->lifecycle.state ==
+			   NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED) {
+		if (!prepare->post_ponr_errno)
+			panic("NACC committed exec exited without failure record");
+		ret = nacc_lifecycle_target_failed_and_exited(
+			&prepare->agent->lifecycle, &prepare->lifecycle, target,
+			generation, prepare->post_ponr_errno);
+		if (!ret)
+			ret = nacc_lifecycle_retire_exec(
+				&prepare->agent->lifecycle, &prepare->lifecycle,
+				target, generation);
+	} else if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		ret = nacc_lifecycle_target_exited(
+			&prepare->agent->lifecycle, &prepare->lifecycle, target,
+			generation);
+		if (!ret)
+			ret = nacc_lifecycle_retire_exec(
+				&prepare->agent->lifecycle, &prepare->lifecycle,
+				target, generation);
+	} else {
+		panic("NACC task exit found invalid transaction state");
+	}
+	if (ret)
+		panic("NACC task exit transition failed (%d)", ret);
+	list_del_init(&prepare->list);
+	nacc_finish_destroy_if_drained(prepare->agent);
+	mutex_unlock(&nacc_object_lock);
+	kref_put(&prepare->reference, nacc_prepare_free);
 }
 
 int nacc_control_open(struct file *file)
@@ -283,6 +452,10 @@ long nacc_prepare_exec(struct file *file, void __user *argument,
 	if (IS_ERR(target))
 		return PTR_ERR(target);
 	(void)pidfd_flags;
+	if (target->flags & PF_KTHREAD) {
+		put_task_struct(target);
+		return -EINVAL;
+	}
 	prepare = kzalloc(sizeof(*prepare), GFP_KERNEL);
 	if (!prepare) {
 		put_task_struct(target);

@@ -116,11 +116,6 @@ static void test_multiple_transactions_and_destroy(void)
 	      first.state == NACC_LIFECYCLE_EXEC_COMMITTED &&
 	      agent.committed_count == 1 && agent.prepared_count == 1,
 	      "point-of-no-return commit is explicit");
-	check(!nacc_lifecycle_activate(&agent, &first, TARGET_ONE, first_gen) &&
-	      agent.active_count == 1 && agent.prepared_count == 1 &&
-	      !agent.committed_count &&
-	      nacc_lifecycle_query_status(&agent) == 3,
-	      "one transaction activates without consuming another");
 	check(nacc_lifecycle_abort_prepare(&other, &second, TARGET_TWO,
 					   second_gen) == -ESTALE,
 	      "transaction cannot be consumed through another Agent");
@@ -137,6 +132,13 @@ static void test_multiple_transactions_and_destroy(void)
 		      -ESHUTDOWN,
 		      "DESTROYING rejects new prepare transactions");
 	}
+	check(!nacc_lifecycle_activate(&agent, &first, TARGET_ONE, first_gen) &&
+	      agent.active_count == 1 && agent.prepared_count == 1 &&
+	      !agent.committed_count,
+	      "DESTROYING activates an already committed transaction for drain");
+	check(nacc_lifecycle_commit_reexec(&agent, &first, TARGET_ONE,
+					  &first_gen) == -ESHUTDOWN,
+	      "DESTROYING rejects a new re-exec operation");
 	check(!nacc_lifecycle_abort_prepare(&agent, &second, TARGET_TWO,
 					    second_gen),
 	      "prepared target early exit rolls back independently");
@@ -224,15 +226,45 @@ static void test_post_ponr_failure(void)
 	      "post-PONR failed transaction retires after target cleanup");
 }
 
+static void test_reexec(void)
+{
+	struct nacc_lifecycle_agent agent = new_agent();
+	struct nacc_lifecycle_exec tx = {};
+	uint64_t first = prepare(&agent, &tx, TARGET_ONE);
+	uint64_t second = 0;
+
+	if (nacc_lifecycle_commit_exec(&agent, &tx, TARGET_ONE, first) ||
+	    nacc_lifecycle_activate(&agent, &tx, TARGET_ONE, first))
+		ksft_exit_fail_msg("cannot activate reexec fixture\n");
+	check(!nacc_lifecycle_commit_reexec(&agent, &tx, TARGET_ONE, &second) &&
+	      second > first &&
+	      tx.state == NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED &&
+	      agent.active_count == 1,
+	      "re-exec advances generation without dropping active ownership");
+	check(nacc_lifecycle_activate(&agent, &tx, TARGET_ONE, second) ==
+	      -EALREADY,
+	      "re-exec cannot use initial activation transition");
+	check(!nacc_lifecycle_activate_reexec(&agent, &tx, TARGET_ONE, second) &&
+	      tx.state == NACC_LIFECYCLE_EXEC_ACTIVE && agent.active_count == 1,
+	      "re-exec activation preserves one active task");
+	check(!nacc_lifecycle_commit_reexec(&agent, &tx, TARGET_ONE, &second) &&
+	      !nacc_lifecycle_target_failed_and_exited(
+		      &agent, &tx, TARGET_ONE, second, ENOEXEC) &&
+	      !agent.active_count &&
+	      tx.state == NACC_LIFECYCLE_EXEC_FAILED,
+	      "post-PONR re-exec failure becomes terminal for the task");
+}
+
 int main(void)
 {
 	ksft_print_header();
-	ksft_set_plan(39);
+	ksft_set_plan(44);
 	test_generation_and_create();
 	test_rollback_and_reprepare();
 	test_multiple_transactions_and_destroy();
 	test_failure_scopes();
 	test_post_ponr_failure();
+	test_reexec();
 	ksft_finished();
 	return failures ? KSFT_FAIL : KSFT_PASS;
 }

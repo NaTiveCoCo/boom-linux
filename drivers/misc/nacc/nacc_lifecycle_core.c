@@ -143,7 +143,8 @@ int nacc_lifecycle_activate(struct nacc_lifecycle_agent *agent,
 
 	if (!agent || !tx)
 		return -EINVAL;
-	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED)
+	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED &&
+	    agent->state != NACC_LIFECYCLE_AGENT_DESTROYING)
 		return -ESHUTDOWN;
 	if (tx->state != NACC_LIFECYCLE_EXEC_COMMITTED)
 		return -EALREADY;
@@ -183,6 +184,57 @@ int nacc_lifecycle_commit_exec(struct nacc_lifecycle_agent *agent,
 	return 0;
 }
 
+int nacc_lifecycle_commit_reexec(struct nacc_lifecycle_agent *agent,
+	struct nacc_lifecycle_exec *tx, nacc_lifecycle_u64 target,
+	nacc_lifecycle_u64 *prepare_generation)
+{
+	int ret;
+
+	if (!agent || !tx || !target || !prepare_generation)
+		return -EINVAL;
+	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED)
+		return -ESHUTDOWN;
+	if (tx->state != NACC_LIFECYCLE_EXEC_ACTIVE)
+		return -EALREADY;
+	ret = nacc_lifecycle_match_exec_owner(agent, tx);
+	if (ret)
+		return ret;
+	if (tx->target_identity != target)
+		return -ESTALE;
+	if (!agent->active_count || tx->failure_errno ||
+	    agent->last_prepare_generation < tx->prepare_generation)
+		return -EINVAL;
+	if (agent->last_prepare_generation == ~(nacc_lifecycle_u64)0)
+		return -EOVERFLOW;
+	agent->last_prepare_generation++;
+	tx->prepare_generation = agent->last_prepare_generation;
+	tx->state = NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED;
+	*prepare_generation = tx->prepare_generation;
+	return 0;
+}
+
+int nacc_lifecycle_activate_reexec(struct nacc_lifecycle_agent *agent,
+	struct nacc_lifecycle_exec *tx, nacc_lifecycle_u64 target,
+	nacc_lifecycle_u64 generation)
+{
+	int ret;
+
+	if (!agent || !tx)
+		return -EINVAL;
+	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED &&
+	    agent->state != NACC_LIFECYCLE_AGENT_DESTROYING)
+		return -ESHUTDOWN;
+	if (tx->state != NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED)
+		return -EALREADY;
+	ret = nacc_lifecycle_match_exec(agent, tx, target, generation);
+	if (ret)
+		return ret;
+	if (!agent->active_count || tx->failure_errno)
+		return -EINVAL;
+	tx->state = NACC_LIFECYCLE_EXEC_ACTIVE;
+	return 0;
+}
+
 int nacc_lifecycle_target_failed_and_exited(
 	struct nacc_lifecycle_agent *agent, struct nacc_lifecycle_exec *tx,
 	nacc_lifecycle_u64 target, nacc_lifecycle_u64 generation,
@@ -193,6 +245,7 @@ int nacc_lifecycle_target_failed_and_exited(
 	if (!agent || !tx || !target || failure_errno <= 0)
 		return -EINVAL;
 	if (tx->state != NACC_LIFECYCLE_EXEC_COMMITTED &&
+	    tx->state != NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED &&
 	    tx->state != NACC_LIFECYCLE_EXEC_ACTIVE)
 		return -EALREADY;
 	ret = nacc_lifecycle_match_exec(agent, tx, target, generation);

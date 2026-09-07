@@ -66,6 +66,7 @@
 #include <linux/coredump.h>
 #include <linux/time_namespace.h>
 #include <linux/user_events.h>
+#include <linux/nacc_exec.h>
 
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
@@ -1252,6 +1253,9 @@ int begin_new_exec(struct linux_binprm * bprm)
 	retval = bprm_creds_from_file(bprm);
 	if (retval)
 		return retval;
+	retval = nacc_exec_commit_current();
+	if (retval)
+		return retval;
 
 	/*
 	 * Ensure all future errors are fatal.
@@ -1463,6 +1467,7 @@ void finalize_exec(struct linux_binprm *bprm)
 	task_lock(current->group_leader);
 	current->signal->rlim[RLIMIT_STACK] = bprm->rlim_stack;
 	task_unlock(current->group_leader);
+	nacc_exec_activate_current();
 }
 EXPORT_SYMBOL(finalize_exec);
 
@@ -1885,16 +1890,28 @@ out_unmark:
 	return retval;
 }
 
+static bool exec_error_always_restarts(int error)
+{
+	return error == -ERESTARTNOINTR;
+}
+
+static bool exec_error_may_restart(int error)
+{
+	return error == -ERESTARTSYS || error == -ERESTARTNOHAND ||
+	       error == -ERESTART_RESTARTBLOCK;
+}
+
 static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
 			      int flags)
 {
 	struct linux_binprm *bprm;
+	bool nacc_aborted;
 	int retval;
 
 	if (IS_ERR(filename))
-		return PTR_ERR(filename);
+		goto out_bad_filename;
 
 	/*
 	 * We move the actual failure in case of RLIMIT_NPROC excess from
@@ -1905,7 +1922,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if ((current->flags & PF_NPROC_EXCEEDED) &&
 	    is_rlimit_overlimit(current_ucounts(), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC))) {
 		retval = -EAGAIN;
-		goto out_ret;
+		goto out_abort;
 	}
 
 	/* We're below the limit (still or again), so we don't want to make
@@ -1915,7 +1932,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	bprm = alloc_bprm(fd, filename);
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
-		goto out_ret;
+		goto out_abort;
 	}
 
 	retval = count(argv, MAX_ARG_STRINGS);
@@ -1963,10 +1980,31 @@ static int do_execveat_common(int fd, struct filename *filename,
 
 	retval = bprm_execve(bprm, fd, filename, flags);
 out_free:
+	if (retval < 0) {
+		if (bprm->point_of_no_return)
+			nacc_exec_record_failure_current(-retval);
+		else if (!exec_error_always_restarts(retval)) {
+			nacc_aborted = nacc_exec_abort_current();
+			if (nacc_aborted && exec_error_may_restart(retval))
+				retval = -EINTR;
+		}
+	}
 	free_bprm(bprm);
 
 out_ret:
 	putname(filename);
+	return retval;
+
+out_abort:
+	if (!exec_error_always_restarts(retval)) {
+		if (nacc_exec_abort_current() && exec_error_may_restart(retval))
+			retval = -EINTR;
+	}
+	goto out_ret;
+
+out_bad_filename:
+	retval = PTR_ERR(filename);
+	nacc_exec_abort_current();
 	return retval;
 }
 
