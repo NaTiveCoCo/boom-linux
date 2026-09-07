@@ -50,6 +50,24 @@ static bool nacc_root_page_in_pool(
 		       layout->nacc_pool.size - NACC_ROOT_PAGE_SIZE;
 }
 
+static bool nacc_root_range_contains(nacc_bootstrap_u64 outer_base,
+				     nacc_bootstrap_u64 outer_size,
+				     nacc_bootstrap_u64 inner_base,
+				     nacc_bootstrap_u64 inner_size)
+{
+	return inner_base >= outer_base && inner_base - outer_base <= outer_size &&
+	       inner_size <= outer_size - (inner_base - outer_base);
+}
+
+static bool nacc_root_ranges_overlap(nacc_bootstrap_u64 left_base,
+				     nacc_bootstrap_u64 left_size,
+				     nacc_bootstrap_u64 right_base,
+				     nacc_bootstrap_u64 right_size)
+{
+	return left_base < right_base + right_size &&
+	       right_base < left_base + left_size;
+}
+
 static int nacc_root_round_pages(nacc_bootstrap_u64 size,
 				 nacc_bootstrap_u64 *page_count)
 {
@@ -226,12 +244,118 @@ static int nacc_root_initialize_ranges(
 	return 0;
 }
 
-int nacc_root_build(struct nacc_root_build_result *result,
-		    const struct nacc_bootstrap_physical_layout *layout,
-		    const struct nacc_bootstrap_descriptor *descriptor,
-		    const struct nacc_agent_image_metadata *image,
-		    const nacc_bootstrap_u64 kernel_root_high[256],
-		    const struct nacc_root_backend *backend)
+static int nacc_root_validate_live_config(
+	const struct nacc_bootstrap_physical_layout *layout,
+	const struct nacc_bootstrap_descriptor *descriptor,
+	const struct nacc_root_range management[5],
+	const struct nacc_root_live_config *config)
+{
+	const nacc_bootstrap_u64 allowed_permissions =
+		NACC_ROOT_PTE_READ | NACC_ROOT_PTE_WRITE |
+		NACC_ROOT_PTE_EXECUTE | NACC_ROOT_PTE_USER;
+	size_t index;
+
+	if (!config || !nacc_root_page_aligned(config->root_physical_address) ||
+	    !nacc_root_page_aligned(config->ptp_pool_base) ||
+	    !nacc_root_page_aligned(config->ptp_pool_size) ||
+	    !config->ptp_pool_size ||
+	    !config->control_root ||
+	    config->control_root->root_physical_address !=
+		    layout->control_root_l0.base ||
+	    config->control_root->next_pool_physical_address <
+		    layout->nacc_pool.base ||
+	    config->control_root->next_pool_physical_address >
+		    layout->nacc_pool.base + layout->nacc_pool.size ||
+	    config->ptp_pool_base <
+		    config->control_root->next_pool_physical_address ||
+	    config->user_mapping_count > NACC_ROOT_MAX_USER_MAPPINGS ||
+	    (config->user_mapping_count && !config->user_mappings) ||
+	    !nacc_root_range_contains(layout->nacc_pool.base,
+				      layout->nacc_pool.size,
+				      config->ptp_pool_base,
+				      config->ptp_pool_size) ||
+	    !nacc_root_range_contains(config->ptp_pool_base,
+				      config->ptp_pool_size,
+				      config->root_physical_address,
+				      NACC_ROOT_PAGE_SIZE))
+		return -EINVAL;
+
+	for (index = 0; index < config->user_mapping_count; index++) {
+		const struct nacc_root_user_mapping *mapping =
+			&config->user_mappings[index];
+		nacc_bootstrap_u64 size;
+		size_t other;
+
+		if (!mapping->page_count ||
+		    mapping->page_count > ~(nacc_bootstrap_u64)0 /
+						  NACC_ROOT_PAGE_SIZE)
+			return -EINVAL;
+		size = mapping->page_count * NACC_ROOT_PAGE_SIZE;
+		if (!nacc_root_page_aligned(mapping->virtual_base) ||
+		    !nacc_root_page_aligned(mapping->physical_base) ||
+		    mapping->virtual_base >= NACC_ROOT_SV39_USER_LIMIT ||
+		    size > NACC_ROOT_SV39_USER_LIMIT - mapping->virtual_base ||
+		    mapping->physical_base >=
+			    (1ULL << NACC_ROOT_PHYSICAL_BITS) ||
+		    size > (1ULL << NACC_ROOT_PHYSICAL_BITS) -
+				   mapping->physical_base ||
+		    (mapping->permissions & ~allowed_permissions) ||
+		    !(mapping->permissions & NACC_ROOT_PTE_USER) ||
+		    !(mapping->permissions & (NACC_ROOT_PTE_READ |
+					       NACC_ROOT_PTE_EXECUTE)) ||
+		    ((mapping->permissions & NACC_ROOT_PTE_WRITE) &&
+		     !(mapping->permissions & NACC_ROOT_PTE_READ)) ||
+		    !nacc_root_range_contains(layout->nacc_pool.base,
+					      layout->nacc_pool.size,
+					      mapping->physical_base, size) ||
+		    nacc_root_ranges_overlap(
+			    mapping->physical_base, size,
+			    layout->nacc_pool.base,
+			    config->control_root->next_pool_physical_address -
+				    layout->nacc_pool.base) ||
+		    nacc_root_ranges_overlap(mapping->physical_base, size,
+					 config->ptp_pool_base,
+					 config->ptp_pool_size) ||
+		    nacc_root_ranges_overlap(mapping->virtual_base, size,
+					 descriptor->agent_virtual_base,
+					 layout->agent_region.size))
+			return -EINVAL;
+		for (other = 0; other < 5; other++) {
+			nacc_bootstrap_u64 management_size =
+				management[other].page_count * NACC_ROOT_PAGE_SIZE;
+
+			if (nacc_root_ranges_overlap(mapping->virtual_base,
+						   size,
+						   management[other].virtual_base,
+						   management_size))
+				return -EEXIST;
+		}
+		for (other = 0; other < index; other++) {
+			const struct nacc_root_user_mapping *prior =
+				&config->user_mappings[other];
+			nacc_bootstrap_u64 prior_size =
+				prior->page_count * NACC_ROOT_PAGE_SIZE;
+
+			if (nacc_root_ranges_overlap(mapping->virtual_base, size,
+						   prior->virtual_base,
+						   prior_size) ||
+			    nacc_root_ranges_overlap(mapping->physical_base, size,
+						   prior->physical_base,
+						   prior_size))
+				return -EEXIST;
+		}
+	}
+	return 0;
+}
+
+static int nacc_root_build_common(
+	struct nacc_root_build_result *result,
+	const struct nacc_bootstrap_physical_layout *layout,
+	const struct nacc_bootstrap_descriptor *descriptor,
+	const struct nacc_agent_image_metadata *image,
+	const nacc_bootstrap_u64 kernel_root_high[256],
+	const struct nacc_root_live_config *config,
+	const struct nacc_root_backend *backend)
 {
 	struct nacc_root_build_result candidate = {};
 	struct nacc_root_range ranges[5];
@@ -263,11 +387,19 @@ int nacc_root_build(struct nacc_root_build_result *result,
 	ret = nacc_root_initialize_ranges(ranges, layout, descriptor, image);
 	if (ret)
 		return ret;
+	if (config) {
+		ret = nacc_root_validate_live_config(layout, descriptor, ranges,
+					     config);
+		if (ret)
+			return ret;
+	}
 
 	cursor = (struct nacc_root_cursor) {
-		.next = layout->nacc_pool.base,
-		.end = layout->nacc_pool.base + layout->nacc_pool.size,
-		.root = layout->control_root_l0.base,
+		.next = config ? config->ptp_pool_base : layout->nacc_pool.base,
+		.end = config ? config->ptp_pool_base + config->ptp_pool_size :
+				layout->nacc_pool.base + layout->nacc_pool.size,
+		.root = config ? config->root_physical_address :
+				layout->control_root_l0.base,
 		.backend = backend,
 	};
 	ret = nacc_root_backend_result(backend->zero_page(
@@ -296,10 +428,54 @@ int nacc_root_build(struct nacc_root_build_result *result,
 			candidate.leaf_count++;
 		}
 	}
+	if (config) {
+		for (index = 0; index < config->user_mapping_count; index++) {
+			const struct nacc_root_user_mapping *mapping =
+				&config->user_mappings[index];
+
+			for (page = 0; page < mapping->page_count; page++) {
+				virtual_address = mapping->virtual_base +
+					page * NACC_ROOT_PAGE_SIZE;
+				physical_address = mapping->physical_base +
+					page * NACC_ROOT_PAGE_SIZE;
+				ret = nacc_root_map_leaf(
+					&cursor, layout, virtual_address,
+					physical_address, mapping->permissions);
+				if (ret)
+					return ret;
+				candidate.leaf_count++;
+			}
+		}
+	}
 
 	candidate.root_physical_address = cursor.root;
 	candidate.next_pool_physical_address = cursor.next;
 	candidate.lower_ptp_count = cursor.lower_ptp_count;
 	*result = candidate;
 	return 0;
+}
+
+int nacc_root_build(struct nacc_root_build_result *result,
+		    const struct nacc_bootstrap_physical_layout *layout,
+		    const struct nacc_bootstrap_descriptor *descriptor,
+		    const struct nacc_agent_image_metadata *image,
+		    const nacc_bootstrap_u64 kernel_root_high[256],
+		    const struct nacc_root_backend *backend)
+{
+	return nacc_root_build_common(result, layout, descriptor, image,
+				      kernel_root_high, NULL, backend);
+}
+
+int nacc_root_build_live(struct nacc_root_build_result *result,
+			 const struct nacc_bootstrap_physical_layout *layout,
+			 const struct nacc_bootstrap_descriptor *descriptor,
+			 const struct nacc_agent_image_metadata *image,
+			 const nacc_bootstrap_u64 kernel_root_high[256],
+			 const struct nacc_root_live_config *config,
+			 const struct nacc_root_backend *backend)
+{
+	if (!config)
+		return -EINVAL;
+	return nacc_root_build_common(result, layout, descriptor, image,
+				      kernel_root_high, config, backend);
 }
