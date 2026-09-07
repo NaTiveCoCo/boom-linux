@@ -63,6 +63,8 @@ void nacc_linux_bootstrap_enter(const struct nacc_bootstrap_descriptor *descript
 
 	pr_info("NACC boot->AS bootstrap request\n");
 	local_irq_save(flags);
+	/* AS trap 必须先有可供 handle_exception 使用的 Linux kernel stack。 */
+	current->thread_info.kernel_sp = nacc_linux_bootstrap_stack_top(current);
 	csr_write(CSR_SATP, control_satp);
 	local_flush_tlb_all();
 	result = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_BOOTSTRAP,
