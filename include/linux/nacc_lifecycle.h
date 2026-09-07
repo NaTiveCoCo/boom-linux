@@ -27,6 +27,7 @@ enum nacc_lifecycle_agent_state {
 enum nacc_lifecycle_exec_state {
 	NACC_LIFECYCLE_EXEC_EMPTY = 0,
 	NACC_LIFECYCLE_EXEC_PREPARED,
+	NACC_LIFECYCLE_EXEC_COMMITTED,
 	NACC_LIFECYCLE_EXEC_ACTIVE,
 	NACC_LIFECYCLE_EXEC_EXITED,
 	NACC_LIFECYCLE_EXEC_FAILED,
@@ -44,8 +45,8 @@ struct nacc_lifecycle_agent {
 	nacc_lifecycle_u64 last_prepare_generation;
 	nacc_lifecycle_u32 transaction_count;
 	nacc_lifecycle_u32 prepared_count;
+	nacc_lifecycle_u32 committed_count;
 	nacc_lifecycle_u32 active_count;
-	nacc_lifecycle_u32 reserved;
 };
 
 /* target_identity 代表持有引用的 kernel task identity，不是 numeric PID。 */
@@ -73,6 +74,10 @@ int nacc_lifecycle_abort_prepare(struct nacc_lifecycle_agent *agent,
 				 struct nacc_lifecycle_exec *transaction,
 				 nacc_lifecycle_u64 target_identity,
 				 nacc_lifecycle_u64 prepare_generation);
+int nacc_lifecycle_commit_exec(struct nacc_lifecycle_agent *agent,
+			       struct nacc_lifecycle_exec *transaction,
+			       nacc_lifecycle_u64 target_identity,
+			       nacc_lifecycle_u64 prepare_generation);
 int nacc_lifecycle_activate(struct nacc_lifecycle_agent *agent,
 			    struct nacc_lifecycle_exec *transaction,
 			    nacc_lifecycle_u64 target_identity,

@@ -72,7 +72,7 @@ int nacc_lifecycle_create(struct nacc_lifecycle_agent *agent,
 		return -EALREADY;
 	if (agent->failure_errno || agent->agent_cookie || agent->agent_generation ||
 	    agent->last_prepare_generation || agent->transaction_count ||
-	    agent->prepared_count || agent->active_count || agent->reserved)
+	    agent->prepared_count || agent->committed_count || agent->active_count)
 		return -EINVAL;
 	agent->agent_cookie = cookie;
 	agent->agent_generation = generation;
@@ -145,17 +145,41 @@ int nacc_lifecycle_activate(struct nacc_lifecycle_agent *agent,
 		return -EINVAL;
 	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED)
 		return -ESHUTDOWN;
+	if (tx->state != NACC_LIFECYCLE_EXEC_COMMITTED)
+		return -EALREADY;
+	ret = nacc_lifecycle_match_exec(agent, tx, target, generation);
+	if (ret)
+		return ret;
+	if (!agent->committed_count ||
+	    agent->active_count == ~(nacc_lifecycle_u32)0)
+		return -EINVAL;
+	agent->committed_count--;
+	agent->active_count++;
+	tx->state = NACC_LIFECYCLE_EXEC_ACTIVE;
+	return 0;
+}
+
+int nacc_lifecycle_commit_exec(struct nacc_lifecycle_agent *agent,
+	struct nacc_lifecycle_exec *tx, nacc_lifecycle_u64 target,
+	nacc_lifecycle_u64 generation)
+{
+	int ret;
+
+	if (!agent || !tx)
+		return -EINVAL;
+	if (agent->state != NACC_LIFECYCLE_AGENT_CREATED)
+		return -ESHUTDOWN;
 	if (tx->state != NACC_LIFECYCLE_EXEC_PREPARED)
 		return -EALREADY;
 	ret = nacc_lifecycle_match_exec(agent, tx, target, generation);
 	if (ret)
 		return ret;
 	if (!agent->prepared_count ||
-	    agent->active_count == ~(nacc_lifecycle_u32)0)
+	    agent->committed_count == ~(nacc_lifecycle_u32)0)
 		return -EINVAL;
 	agent->prepared_count--;
-	agent->active_count++;
-	tx->state = NACC_LIFECYCLE_EXEC_ACTIVE;
+	agent->committed_count++;
+	tx->state = NACC_LIFECYCLE_EXEC_COMMITTED;
 	return 0;
 }
 
@@ -168,14 +192,21 @@ int nacc_lifecycle_target_failed_and_exited(
 
 	if (!agent || !tx || !target || failure_errno <= 0)
 		return -EINVAL;
-	if (tx->state != NACC_LIFECYCLE_EXEC_ACTIVE)
+	if (tx->state != NACC_LIFECYCLE_EXEC_COMMITTED &&
+	    tx->state != NACC_LIFECYCLE_EXEC_ACTIVE)
 		return -EALREADY;
 	ret = nacc_lifecycle_match_exec(agent, tx, target, generation);
 	if (ret)
 		return ret;
-	if (!agent->active_count)
-		return -EINVAL;
-	agent->active_count--;
+	if (tx->state == NACC_LIFECYCLE_EXEC_COMMITTED) {
+		if (!agent->committed_count)
+			return -EINVAL;
+		agent->committed_count--;
+	} else {
+		if (!agent->active_count)
+			return -EINVAL;
+		agent->active_count--;
+	}
 	tx->failure_errno = failure_errno;
 	tx->state = NACC_LIFECYCLE_EXEC_FAILED;
 	return 0;
@@ -242,7 +273,8 @@ int nacc_lifecycle_finish_destroy(struct nacc_lifecycle_agent *agent)
 		return -EINVAL;
 	if (agent->state != NACC_LIFECYCLE_AGENT_DESTROYING)
 		return -EALREADY;
-	if (agent->transaction_count || agent->prepared_count || agent->active_count)
+	if (agent->transaction_count || agent->prepared_count ||
+	    agent->committed_count || agent->active_count)
 		return -EBUSY;
 	agent->state = NACC_LIFECYCLE_AGENT_DEAD;
 	return 0;
@@ -269,7 +301,7 @@ nacc_lifecycle_query_status(const struct nacc_lifecycle_agent *agent)
 		return agent->state;
 	if (agent->active_count)
 		return NACC_LIFECYCLE_AGENT_ACTIVE;
-	if (agent->prepared_count)
+	if (agent->prepared_count || agent->committed_count)
 		return NACC_LIFECYCLE_AGENT_PREPARED;
 	return NACC_LIFECYCLE_AGENT_CREATED;
 }

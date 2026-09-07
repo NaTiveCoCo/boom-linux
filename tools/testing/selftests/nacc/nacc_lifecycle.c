@@ -112,8 +112,13 @@ static void test_multiple_transactions_and_destroy(void)
 	check(agent.transaction_count == 2 && agent.prepared_count == 2 &&
 	      nacc_lifecycle_query_status(&agent) == 2,
 	      "Agent aggregate tracks multiple prepared transactions");
+	check(!nacc_lifecycle_commit_exec(&agent, &first, TARGET_ONE, first_gen) &&
+	      first.state == NACC_LIFECYCLE_EXEC_COMMITTED &&
+	      agent.committed_count == 1 && agent.prepared_count == 1,
+	      "point-of-no-return commit is explicit");
 	check(!nacc_lifecycle_activate(&agent, &first, TARGET_ONE, first_gen) &&
 	      agent.active_count == 1 && agent.prepared_count == 1 &&
+	      !agent.committed_count &&
 	      nacc_lifecycle_query_status(&agent) == 3,
 	      "one transaction activates without consuming another");
 	check(nacc_lifecycle_abort_prepare(&other, &second, TARGET_TWO,
@@ -169,7 +174,8 @@ static void test_failure_scopes(void)
 	struct nacc_lifecycle_exec tx = {};
 	uint64_t generation = prepare(&agent, &tx, TARGET_ONE);
 
-	if (nacc_lifecycle_activate(&agent, &tx, TARGET_ONE, generation))
+	if (nacc_lifecycle_commit_exec(&agent, &tx, TARGET_ONE, generation) ||
+	    nacc_lifecycle_activate(&agent, &tx, TARGET_ONE, generation))
 		ksft_exit_fail_msg("cannot activate failure fixture\n");
 	check(!nacc_lifecycle_target_failed_and_exited(
 		       &agent, &tx, TARGET_ONE, generation, ENOEXEC) &&
@@ -196,14 +202,37 @@ static void test_failure_scopes(void)
 	      "FAILED Agent reaches DEAD only through destroy drain");
 }
 
+static void test_post_ponr_failure(void)
+{
+	struct nacc_lifecycle_agent agent = new_agent();
+	struct nacc_lifecycle_exec tx = {};
+	uint64_t generation = prepare(&agent, &tx, TARGET_ONE);
+
+	check(nacc_lifecycle_activate(&agent, &tx, TARGET_ONE, generation) ==
+	      -EALREADY,
+	      "PREPARED transaction cannot skip point-of-no-return commit");
+	check(!nacc_lifecycle_commit_exec(&agent, &tx, TARGET_ONE, generation) &&
+	      nacc_lifecycle_abort_prepare(&agent, &tx, TARGET_ONE, generation) ==
+	      -EALREADY,
+	      "COMMITTED transaction cannot use pre-PONR rollback");
+	check(!nacc_lifecycle_target_failed_and_exited(
+		       &agent, &tx, TARGET_ONE, generation, ENOEXEC) &&
+	      tx.state == NACC_LIFECYCLE_EXEC_FAILED &&
+	      !agent.committed_count && agent.transaction_count == 1,
+	      "post-PONR pre-activation failure stays destructive and retireable");
+	check(!nacc_lifecycle_retire_exec(&agent, &tx, TARGET_ONE, generation),
+	      "post-PONR failed transaction retires after target cleanup");
+}
+
 int main(void)
 {
 	ksft_print_header();
-	ksft_set_plan(34);
+	ksft_set_plan(39);
 	test_generation_and_create();
 	test_rollback_and_reprepare();
 	test_multiple_transactions_and_destroy();
 	test_failure_scopes();
+	test_post_ponr_failure();
 	ksft_finished();
 	return failures ? KSFT_FAIL : KSFT_PASS;
 }
