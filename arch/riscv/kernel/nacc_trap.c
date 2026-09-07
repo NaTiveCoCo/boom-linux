@@ -18,7 +18,7 @@
 #include <asm/ptrace.h>
 
 #define NACC_AS_LINUX_BOOTSTRAP_READY	0x8000UL
-#define NACC_FIRST_ENTRY_CONTEXT_V1_SIZE	384UL
+#define NACC_FIRST_ENTRY_CONTEXT_V2_SIZE	400UL
 #define NACC_ECALL_INSN_SIZE		4UL
 #define NACC_SV39_USER_LIMIT		(1UL << 38)
 
@@ -27,7 +27,7 @@ static __always_inline long nacc_bootstrap_ready(struct pt_regs *regs)
 	if (!regs->a0 || regs->a0 & (PAGE_SIZE - 1) ||
 	    regs->a0 >= NACC_SV39_USER_LIMIT ||
 	    regs->a0 > NACC_SV39_USER_LIMIT - PAGE_SIZE ||
-	    regs->a1 != NACC_FIRST_ENTRY_CONTEXT_V1_SIZE || !regs->a2 ||
+	    regs->a1 != NACC_FIRST_ENTRY_CONTEXT_V2_SIZE || !regs->a2 ||
 	    !regs->a3 || regs->a4 || regs->a5 || regs->a6)
 		return -EINVAL;
 

@@ -2,7 +2,7 @@
 /*
  * NACC private bootstrap ABI。
  *
- * 该 header 必须与 OpenSBI v1.1 的 216-byte descriptor 保持逐字段一致。
+ * 该 header 必须与 OpenSBI v2.0 的 232-byte descriptor 保持逐字段一致。
  * 它不是 user-visible UAPI，也不表示 Linux 已经完成 Agent bootstrap。
  */
 #ifndef _ASM_RISCV_NACC_BOOTSTRAP_H
@@ -18,16 +18,18 @@
 #endif
 
 #define NACC_BOOTSTRAP_MAGIC 0x4e414343U
-#define NACC_BOOTSTRAP_ABI_MAJOR 1U
-#define NACC_BOOTSTRAP_ABI_MINOR 1U
+#define NACC_BOOTSTRAP_ABI_MAJOR 2U
+#define NACC_BOOTSTRAP_ABI_MINOR 0U
 #define NACC_BOOTSTRAP_PAGE_SIZE 4096ULL
 #define NACC_BOOTSTRAP_DESCRIPTOR_MAX_SIZE 4096U
 #define NACC_BOOTSTRAP_SV39_USER_LIMIT (1ULL << 38)
-#define NACC_BOOTSTRAP_FEATURES_V1 0ULL
+#define NACC_BOOTSTRAP_FEATURE_MANAGEMENT_VA (1ULL << 0)
+#define NACC_BOOTSTRAP_FEATURES_V2 NACC_BOOTSTRAP_FEATURE_MANAGEMENT_VA
 #define NACC_BOOTSTRAP_DELEGATION_EXCEPTION_MASK 0x000000000000b1ffULL
 #define NACC_BOOTSTRAP_DELEGATION_INTERRUPT_MASK 0x0000000000000222ULL
 
 #define NACC_BOOTSTRAP_DESCRIPTOR_V1_0_SIZE 184U
+#define NACC_BOOTSTRAP_DESCRIPTOR_V1_1_SIZE 216U
 
 #ifdef __KERNEL__
 typedef u32 nacc_bootstrap_u32;
@@ -62,7 +64,11 @@ struct nacc_bootstrap_agent_memory_state {
 	struct nacc_bootstrap_range range;
 };
 
-/* Linux 提供给 OpenSBI 的 runtime layout；所有 range 都是 physical range。 */
+/*
+ * Linux 提供给 OpenSBI 的 runtime layout；所有 range 都是 physical range。
+ * external emergency workspace 仅是未使用的 M/bootstrap non-secret reservation；
+ * no-map 不代表 M-private 硬件保护，也不得把它加入 AS initial leaf set。
+ */
 struct nacc_bootstrap_descriptor {
 	nacc_bootstrap_u32 magic;
 	nacc_bootstrap_u16 abi_major;
@@ -84,9 +90,11 @@ struct nacc_bootstrap_descriptor {
 	nacc_bootstrap_u64 mailbox_virtual_base;
 	nacc_bootstrap_u64 emergency_stack_virtual_top;
 	nacc_bootstrap_u64 bootstrap_sequence;
+	nacc_bootstrap_u64 nacc_pool_virtual_base;
+	nacc_bootstrap_u64 bitmap_backing_virtual_base;
 };
 
-#define NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE \
+#define NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE \
 	((unsigned int)sizeof(struct nacc_bootstrap_descriptor))
 
 #define NACC_BOOTSTRAP_CAP_PROBE (1UL << 0)
@@ -131,7 +139,7 @@ _Static_assert(sizeof(struct nacc_bootstrap_range) == 16,
 		       "nacc_bootstrap_range ABI size changed");
 _Static_assert(sizeof(struct nacc_bootstrap_physical_layout) == 128,
 		       "nacc_bootstrap_physical_layout size changed");
-_Static_assert(sizeof(struct nacc_bootstrap_descriptor) == 216,
+_Static_assert(sizeof(struct nacc_bootstrap_descriptor) == 232,
 		       "nacc_bootstrap_descriptor ABI size changed");
 _Static_assert(offsetof(struct nacc_bootstrap_descriptor, feature_bits) == 16,
 		       "nacc_bootstrap_descriptor feature_bits offset changed");
@@ -154,5 +162,12 @@ _Static_assert(offsetof(struct nacc_bootstrap_descriptor,
 _Static_assert(offsetof(struct nacc_bootstrap_descriptor,
 			       bootstrap_sequence) == 208,
 		       "nacc_bootstrap_descriptor sequence offset changed");
+_Static_assert(offsetof(struct nacc_bootstrap_descriptor,
+			       nacc_pool_virtual_base) ==
+		       NACC_BOOTSTRAP_DESCRIPTOR_V1_1_SIZE,
+		       "nacc_bootstrap_descriptor pool VA offset changed");
+_Static_assert(offsetof(struct nacc_bootstrap_descriptor,
+			       bitmap_backing_virtual_base) == 224,
+		       "nacc_bootstrap_descriptor bitmap backing VA offset changed");
 
 #endif /* _ASM_RISCV_NACC_BOOTSTRAP_H */

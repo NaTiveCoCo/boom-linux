@@ -243,7 +243,7 @@ int nacc_bootstrap_validate(const struct nacc_bootstrap_descriptor *descriptor,
 				    size_t buffer_size)
 {
 	const struct nacc_bootstrap_range *ranges[7];
-	struct nacc_bootstrap_range virtual_ranges[3];
+	struct nacc_bootstrap_range virtual_ranges[5];
 	nacc_bootstrap_u64 bitmap_page_count;
 	nacc_bootstrap_u64 bitmap_byte_count;
 	nacc_bootstrap_u64 bitmap_storage_size;
@@ -264,17 +264,17 @@ int nacc_bootstrap_validate(const struct nacc_bootstrap_descriptor *descriptor,
 	if (descriptor->magic != NACC_BOOTSTRAP_MAGIC ||
 	    descriptor->abi_major != NACC_BOOTSTRAP_ABI_MAJOR)
 		return -EOPNOTSUPP;
-	if (descriptor->abi_minor < NACC_BOOTSTRAP_ABI_MINOR)
-		return -EOPNOTSUPP;
-	if (buffer_size < NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE ||
-	    descriptor->struct_size < NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE ||
+	if (buffer_size < NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE ||
+	    descriptor->struct_size < NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE ||
 	    descriptor->struct_size > NACC_BOOTSTRAP_DESCRIPTOR_MAX_SIZE ||
 	    descriptor->struct_size > buffer_size)
 		return -EINVAL;
 	if (descriptor->abi_minor == NACC_BOOTSTRAP_ABI_MINOR &&
-	    descriptor->struct_size != NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE)
+	    descriptor->struct_size != NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE)
 		return -EINVAL;
-	if (descriptor->feature_bits & ~NACC_BOOTSTRAP_FEATURES_V1)
+	if ((descriptor->feature_bits & ~NACC_BOOTSTRAP_FEATURES_V2) ||
+	    (descriptor->feature_bits & NACC_BOOTSTRAP_FEATURES_V2) !=
+		    NACC_BOOTSTRAP_FEATURES_V2)
 		return -EOPNOTSUPP;
 	if (descriptor->reserved0)
 		return -EINVAL;
@@ -287,11 +287,11 @@ int nacc_bootstrap_validate(const struct nacc_bootstrap_descriptor *descriptor,
 		    (const unsigned char *)descriptor->reserved,
 		    sizeof(descriptor->reserved)))
 		return -EINVAL;
-	if (descriptor->struct_size > NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE &&
+	if (descriptor->struct_size > NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE &&
 	    !nacc_bootstrap_bytes_are_zero(
 		    (const unsigned char *)descriptor +
-			    NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE,
-		    descriptor->struct_size - NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE))
+				    NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE,
+			    descriptor->struct_size - NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE))
 		return -EOPNOTSUPP;
 
 	for (index = 0; index < sizeof(ranges) / sizeof(ranges[0]); index++) {
@@ -311,6 +311,10 @@ int nacc_bootstrap_validate(const struct nacc_bootstrap_descriptor *descriptor,
 		descriptor->emergency_stack_virtual_top -
 		descriptor->emergency_stack.size;
 	virtual_ranges[2].size = descriptor->emergency_stack.size;
+	virtual_ranges[3].base = descriptor->nacc_pool_virtual_base;
+	virtual_ranges[3].size = descriptor->nacc_pool.size;
+	virtual_ranges[4].base = descriptor->bitmap_backing_virtual_base;
+	virtual_ranges[4].size = descriptor->bitmap_backing.size;
 	for (index = 0; index < sizeof(virtual_ranges) /
 					    sizeof(virtual_ranges[0]); index++) {
 		if (!nacc_bootstrap_virtual_range_valid(&virtual_ranges[index]))

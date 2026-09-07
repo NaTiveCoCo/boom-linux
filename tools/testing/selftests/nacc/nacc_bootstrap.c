@@ -15,7 +15,8 @@ static void initialize_descriptor(struct nacc_bootstrap_descriptor *descriptor)
 	descriptor->magic = NACC_BOOTSTRAP_MAGIC;
 	descriptor->abi_major = NACC_BOOTSTRAP_ABI_MAJOR;
 	descriptor->abi_minor = NACC_BOOTSTRAP_ABI_MINOR;
-	descriptor->struct_size = NACC_BOOTSTRAP_DESCRIPTOR_V1_SIZE;
+	descriptor->struct_size = NACC_BOOTSTRAP_DESCRIPTOR_V2_SIZE;
+	descriptor->feature_bits = NACC_BOOTSTRAP_FEATURES_V2;
 	descriptor->agent_region.base = UINT64_C(0x10000000);
 	descriptor->agent_region.size = UINT64_C(0x01000000);
 	descriptor->bitmap_target.base = UINT64_C(0x20000000);
@@ -34,6 +35,8 @@ static void initialize_descriptor(struct nacc_bootstrap_descriptor *descriptor)
 	descriptor->mailbox_virtual_base = UINT64_C(0x200000000);
 	descriptor->emergency_stack_virtual_top = UINT64_C(0x300001000);
 	descriptor->bootstrap_sequence = 1;
+	descriptor->nacc_pool_virtual_base = UINT64_C(0x400000000);
+	descriptor->bitmap_backing_virtual_base = UINT64_C(0x500000000);
 }
 
 static void initialize_physical_layout(
@@ -71,16 +74,18 @@ int main(void)
 	struct nacc_bootstrap_descriptor descriptor;
 	struct nacc_bootstrap_physical_layout layout;
 	struct nacc_bootstrap_agent_memory_state memory_state = {};
-	int plan = 66;
+	int plan = 71;
 
 	ksft_print_header();
 	ksft_set_plan(plan);
 
 	report_contract(sizeof(struct nacc_bootstrap_range) == 16 &&
-				 sizeof(struct nacc_bootstrap_descriptor) == 216 &&
+				 sizeof(struct nacc_bootstrap_descriptor) == 232 &&
 				 offsetof(struct nacc_bootstrap_descriptor,
-					  agent_virtual_base) == 184,
-				"OpenSBI v1.1 descriptor layout is 216 bytes");
+					  agent_virtual_base) == 184 &&
+				 offsetof(struct nacc_bootstrap_descriptor,
+					  nacc_pool_virtual_base) == 216,
+				"OpenSBI v2.0 descriptor layout is 232 bytes");
 
 	initialize_descriptor(&descriptor);
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) == 0,
@@ -96,13 +101,19 @@ int main(void)
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
 				-EOPNOTSUPP, "unsupported major is rejected");
 	initialize_descriptor(&descriptor);
-	descriptor.abi_minor--;
+	descriptor.abi_major = 1;
+	descriptor.abi_minor = 1;
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
-				-EOPNOTSUPP, "older minor is rejected");
+				-EOPNOTSUPP, "pre-production v1.1 is rejected");
 	initialize_descriptor(&descriptor);
-	descriptor.feature_bits = 1;
+	descriptor.feature_bits = NACC_BOOTSTRAP_FEATURES_V2 << 1;
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
 				-EOPNOTSUPP, "unknown feature is rejected");
+	initialize_descriptor(&descriptor);
+	descriptor.feature_bits = 0;
+	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
+				-EOPNOTSUPP,
+			"missing management VA feature is rejected");
 	initialize_descriptor(&descriptor);
 	descriptor.reserved[0] = 1;
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
@@ -119,6 +130,26 @@ int main(void)
 	descriptor.agent_virtual_base = descriptor.mailbox_virtual_base;
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
 				-EINVAL, "overlapping virtual ranges are rejected");
+	initialize_descriptor(&descriptor);
+	descriptor.nacc_pool_virtual_base++;
+	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
+				-EINVAL, "unaligned NACC pool VA is rejected");
+	initialize_descriptor(&descriptor);
+	descriptor.nacc_pool_virtual_base = descriptor.agent_virtual_base;
+	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
+				-EINVAL, "NACC pool VA overlap is rejected");
+	initialize_descriptor(&descriptor);
+	descriptor.bitmap_backing_virtual_base =
+		descriptor.nacc_pool_virtual_base;
+	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
+				-EINVAL, "bitmap backing VA overlap is rejected");
+	initialize_descriptor(&descriptor);
+	descriptor.bitmap_backing_virtual_base =
+		NACC_BOOTSTRAP_SV39_USER_LIMIT - descriptor.bitmap_backing.size +
+		NACC_BOOTSTRAP_PAGE_SIZE;
+	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
+				-EINVAL,
+			"bitmap backing VA beyond user half is rejected");
 	initialize_descriptor(&descriptor);
 	descriptor.control_root_l0.base = UINT64_C(0x21000000);
 	report_contract(nacc_bootstrap_validate(&descriptor, sizeof(descriptor)) ==
