@@ -87,6 +87,7 @@ long nacc_linux_bootstrap_ready(struct pt_regs *regs)
 	    csr_read(CSR_SATP) != nacc_linux_session.control_satp ||
 	    (unsigned long)current != nacc_linux_session.linux_thread_pointer)
 		panic("NACC BOOTSTRAP_READY execution invariant failed");
+	pr_info("NACC AS->Linux BOOTSTRAP_READY request\n");
 	request = (struct nacc_linux_bootstrap_ready_request) {
 		.context_address = regs->a0,
 		.context_size = regs->a1,
