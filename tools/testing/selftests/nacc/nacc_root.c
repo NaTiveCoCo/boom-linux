@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../../../arch/riscv/include/asm/nacc_live_root.h"
 #include "../../../../arch/riscv/include/asm/nacc_root.h"
 #include "../kselftest.h"
 
@@ -177,15 +178,18 @@ int main(void)
 	struct nacc_root_build_result result = {};
 	struct nacc_root_build_result control_result;
 	struct nacc_root_build_result sentinel;
+	struct nacc_live_root_layout_request live_layout_request;
+	struct nacc_live_root_layout_result live_layout = {};
 	struct nacc_root_backend backend;
 	struct nacc_root_live_config live_config;
 	struct nacc_root_user_mapping mappings[2];
 	struct fake_page_store store;
 	uint64_t high[256];
+	uint64_t payload_page_counts[2] = { 1, 1 };
 	uint64_t pte;
 	size_t index;
 	int ret;
-	int plan = 36;
+	int plan = 37;
 
 	ksft_print_header();
 	ksft_set_plan(plan);
@@ -280,24 +284,34 @@ int main(void)
 			"bitmap backing leaf has exact PA and writable permissions");
 
 	control_result = result;
+	live_layout_request = (struct nacc_live_root_layout_request) {
+		.ptp_page_count = 12,
+		.payload_page_counts = payload_page_counts,
+		.payload_mapping_count = 2,
+	};
+	ret = nacc_live_root_layout_plan(&live_layout, &layout, &control_result,
+					 &live_layout_request);
+	report_contract(!ret && live_layout.ptp_base ==
+			control_result.next_pool_physical_address,
+			"live layout planner consumes the control cursor");
 	mappings[0] = (struct nacc_root_user_mapping) {
 		.virtual_base = UINT64_C(0x00400000),
-		.physical_base = layout.nacc_pool.base + 30 * NACC_ROOT_PAGE_SIZE,
+		.physical_base = live_layout.payload_bases[0],
 		.page_count = 1,
 		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_EXECUTE |
 			NACC_ROOT_PTE_USER,
 	};
 	mappings[1] = (struct nacc_root_user_mapping) {
 		.virtual_base = UINT64_C(0x00800000),
-		.physical_base = layout.nacc_pool.base + 31 * NACC_ROOT_PAGE_SIZE,
+		.physical_base = live_layout.payload_bases[1],
 		.page_count = 1,
 		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_WRITE |
 			NACC_ROOT_PTE_USER,
 	};
 	live_config = (struct nacc_root_live_config) {
-		.root_physical_address = result.next_pool_physical_address,
-		.ptp_pool_base = result.next_pool_physical_address,
-		.ptp_pool_size = 12 * NACC_ROOT_PAGE_SIZE,
+		.root_physical_address = live_layout.ptp_base,
+		.ptp_pool_base = live_layout.ptp_base,
+		.ptp_pool_size = live_layout.ptp_size,
 		.control_root = &control_result,
 		.user_mappings = mappings,
 		.user_mapping_count = 2,

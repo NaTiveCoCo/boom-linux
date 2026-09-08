@@ -48,12 +48,13 @@ int main(void)
 	int ret;
 
 	ksft_print_header();
-	ksft_set_plan(13);
+	ksft_set_plan(14);
 	initialize_layout(&layout);
 	control_root = (struct nacc_root_build_result) {
 		.root_physical_address = layout.control_root_l0.base,
 		.next_pool_physical_address = layout.nacc_pool.base +
 			8 * NACC_ROOT_PAGE_SIZE,
+		.lower_ptp_count = 7,
 	};
 	request = (struct nacc_live_root_layout_request) {
 		.ptp_page_count = 64,
@@ -121,6 +122,15 @@ int main(void)
 	report_contract(ret == -EINVAL &&
 			!memcmp(&result, &sentinel, sizeof(result)),
 			"the control prefix must contain its ROOT_L0 page");
+
+	control_root.next_pool_physical_address = layout.nacc_pool.base +
+		8 * NACC_ROOT_PAGE_SIZE;
+	control_root.lower_ptp_count = 6;
+	ret = nacc_live_root_layout_plan(&result, &layout, &control_root,
+					 &request);
+	report_contract(ret == -EINVAL &&
+			!memcmp(&result, &sentinel, sizeof(result)),
+			"a stale aligned control cursor is rejected atomically");
 
 	ksft_finished();
 }

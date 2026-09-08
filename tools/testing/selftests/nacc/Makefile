@@ -22,13 +22,16 @@ $(OUTPUT)/nacc_agent_image: nacc_agent_image.c \
 
 $(OUTPUT)/nacc_root: nacc_root.c \
 	$(top_srcdir)/arch/riscv/mm/nacc_root_core.c \
+	$(top_srcdir)/arch/riscv/mm/nacc_live_root_core.c \
 	$(top_srcdir)/arch/riscv/kernel/nacc_agent_image.c \
 	$(top_srcdir)/arch/riscv/kernel/nacc_bootstrap.c \
+	$(top_srcdir)/arch/riscv/include/asm/nacc_live_root.h \
 	$(top_srcdir)/arch/riscv/include/asm/nacc_root.h \
 	$(top_srcdir)/arch/riscv/include/asm/nacc_agent_image.h \
 	$(top_srcdir)/arch/riscv/include/asm/nacc_bootstrap.h
 	$(CC) -o$@ $(CFLAGS) $(LDFLAGS) nacc_root.c \
 		$(top_srcdir)/arch/riscv/mm/nacc_root_core.c \
+		$(top_srcdir)/arch/riscv/mm/nacc_live_root_core.c \
 		$(top_srcdir)/arch/riscv/kernel/nacc_agent_image.c \
 		$(top_srcdir)/arch/riscv/kernel/nacc_bootstrap.c
 

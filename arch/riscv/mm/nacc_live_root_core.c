@@ -34,6 +34,8 @@ int nacc_live_root_layout_plan(struct nacc_live_root_layout_result *result,
 			       const struct nacc_live_root_layout_request *request)
 {
 	struct nacc_live_root_layout_result candidate;
+	nacc_bootstrap_u64 control_page_count;
+	nacc_bootstrap_u64 expected_control_end;
 	nacc_bootstrap_u64 cursor;
 	nacc_bootstrap_u64 end;
 	size_t index;
@@ -47,14 +49,20 @@ int nacc_live_root_layout_plan(struct nacc_live_root_layout_result *result,
 	ret = nacc_bootstrap_physical_layout_validate(layout);
 	if (ret)
 		return ret;
+	control_page_count = layout->nacc_pool.size / NACC_ROOT_PAGE_SIZE;
 	if (control_root->root_physical_address !=
 		    layout->control_root_l0.base ||
+	    control_root->lower_ptp_count >= control_page_count ||
 	    (control_root->next_pool_physical_address &
 	     (NACC_ROOT_PAGE_SIZE - 1)) ||
 	    control_root->next_pool_physical_address <
 		    layout->control_root_l0.base + NACC_ROOT_PAGE_SIZE ||
 	    control_root->next_pool_physical_address >
 		    layout->nacc_pool.base + layout->nacc_pool.size)
+		return -EINVAL;
+	expected_control_end = layout->nacc_pool.base +
+		(control_root->lower_ptp_count + 1) * NACC_ROOT_PAGE_SIZE;
+	if (control_root->next_pool_physical_address != expected_control_end)
 		return -EINVAL;
 
 	memset(&candidate, 0, sizeof(candidate));

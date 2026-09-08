@@ -12,6 +12,7 @@
 #include <asm/nacc_root.h>
 
 struct nacc_live_root_layout_request {
+	/* 包含 live ROOT_L0 本身以及所有 lower PTP。 */
 	nacc_bootstrap_u64 ptp_page_count;
 	const nacc_bootstrap_u64 *payload_page_counts;
 	size_t payload_mapping_count;
