@@ -1302,6 +1302,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 		goto out;
 
 	bprm->mm = NULL;
+	nacc_exec_bind_mm_current();
 
 	retval = exec_task_namespaces();
 	if (retval)

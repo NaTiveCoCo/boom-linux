@@ -8,6 +8,7 @@
 #include <linux/fs.h>
 #include <linux/kref.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/nacc.h>
@@ -36,6 +37,7 @@ struct nacc_prepare_object {
 	struct list_head list;
 	struct nacc_agent_object *agent;
 	struct task_struct *target;
+	struct mm_struct *mm;
 	struct nacc_lifecycle_exec lifecycle;
 	int post_ponr_errno;
 };
@@ -82,7 +84,7 @@ static void nacc_prepare_free(struct kref *reference)
 		container_of(reference, struct nacc_prepare_object, reference);
 
 	if (!list_empty(&prepare->list) ||
-	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY)
+	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY || prepare->mm)
 		panic("NACC freeing live prepare object");
 	put_task_struct(prepare->target);
 	kref_put(&prepare->agent->reference, nacc_agent_free);
@@ -173,13 +175,17 @@ int nacc_exec_commit_current(void)
 
 	mutex_lock(&nacc_object_lock);
 	prepare = nacc_find_prepare_locked(current);
-	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED)
+	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
+		if (prepare->mm)
+			panic("NACC first exec commit found an mm binding");
 		ret = nacc_lifecycle_commit_exec(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
 			nacc_target_identity(current),
 			prepare->lifecycle.prepare_generation);
-	else if (prepare &&
+	} else if (prepare &&
 		 prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		if (prepare->mm != current->mm)
+			panic("NACC re-exec commit found an invalid mm binding");
 		ret = nacc_lifecycle_commit_reexec(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
 			nacc_target_identity(current),
@@ -221,6 +227,37 @@ bool nacc_exec_abort_current(void)
 	return true;
 }
 
+void nacc_exec_bind_mm_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	struct mm_struct *old_mm = NULL;
+
+	if (!current->mm)
+		panic("NACC exec installed a missing mm");
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return;
+	}
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED) {
+		if (prepare->mm)
+			panic("NACC first exec already has an mm binding");
+	} else if (prepare->lifecycle.state ==
+		   NACC_LIFECYCLE_EXEC_REEXEC_COMMITTED) {
+		if (!prepare->mm || prepare->mm == current->mm)
+			panic("NACC re-exec found an invalid mm replacement");
+		old_mm = prepare->mm;
+	} else {
+		panic("NACC exec mm bind found invalid transaction state");
+	}
+	mmget(current->mm);
+	prepare->mm = current->mm;
+	mutex_unlock(&nacc_object_lock);
+	if (old_mm)
+		mmput(old_mm);
+}
+
 void nacc_exec_activate_current(void)
 {
 	struct nacc_prepare_object *prepare;
@@ -232,6 +269,8 @@ void nacc_exec_activate_current(void)
 		mutex_unlock(&nacc_object_lock);
 		return;
 	}
+	if (prepare->mm != current->mm)
+		panic("NACC exec activation found an invalid mm binding");
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED)
 		ret = nacc_lifecycle_activate(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
@@ -272,6 +311,7 @@ void nacc_exec_record_failure_current(int failure_errno)
 void nacc_exec_exit_current(void)
 {
 	struct nacc_prepare_object *prepare;
+	struct mm_struct *mm;
 	u64 generation;
 	u64 target;
 	int ret;
@@ -313,9 +353,13 @@ void nacc_exec_exit_current(void)
 	}
 	if (ret)
 		panic("NACC task exit transition failed (%d)", ret);
+	mm = prepare->mm;
+	prepare->mm = NULL;
 	list_del_init(&prepare->list);
 	nacc_finish_destroy_if_drained(prepare->agent);
 	mutex_unlock(&nacc_object_lock);
+	if (mm)
+		mmput(mm);
 	kref_put(&prepare->reference, nacc_prepare_free);
 }
 
