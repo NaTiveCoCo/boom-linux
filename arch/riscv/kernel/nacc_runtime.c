@@ -152,8 +152,10 @@ int nacc_linux_runtime_lifecycle_call(
 	call.request.sequence = 1;
 	if (nacc_runtime_lifecycle_request_validate(&call.request))
 		return -EINVAL;
+	pr_info("NACC Agent lifecycle opcode %#x begin\n", request->opcode);
 
 	mutex_lock(&nacc_linux_runtime_mutex);
+	pr_info("NACC Agent lifecycle opcode %#x locked\n", request->opcode);
 	nacc_linux_runtime_session_require_idle();
 	call.request.sequence = nacc_linux_runtime_session.next_sequence;
 	init_completion(&call.completion);
@@ -174,6 +176,8 @@ int nacc_linux_runtime_lifecycle_call(
 		*result = call.result;
 
 out_unlock:
+	pr_info("NACC Agent lifecycle opcode %#x return %d\n",
+		request->opcode, ret);
 	mutex_unlock(&nacc_linux_runtime_mutex);
 	return ret;
 }
