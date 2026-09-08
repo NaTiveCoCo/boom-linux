@@ -36,6 +36,8 @@ void nacc_linux_bootstrap_enter(const struct nacc_bootstrap_descriptor *descript
 	u64 context_address;
 	u64 control_satp;
 	u64 old_satp;
+	u64 allowed_rx_base;
+	u64 allowed_rx_size;
 	int ret;
 
 	if (!descriptor || !root || current != nacc_linux_bootstrap_task ||
@@ -50,6 +52,15 @@ void nacc_linux_bootstrap_enter(const struct nacc_bootstrap_descriptor *descript
 		panic("NACC bootstrap context VA overflow");
 	context_address = descriptor->agent_virtual_base +
 			  image->boot_context_offset;
+	if (image->segments[0].virtual_offset >
+	    NACC_BOOTSTRAP_SV39_USER_LIMIT - descriptor->agent_virtual_base)
+		panic("NACC bootstrap Agent RX base overflow");
+	allowed_rx_base = descriptor->agent_virtual_base +
+			  image->segments[0].virtual_offset;
+	allowed_rx_size = image->segments[0].file_size;
+	if (allowed_rx_size >
+	    NACC_BOOTSTRAP_SV39_USER_LIMIT - allowed_rx_base)
+		panic("NACC bootstrap Agent RX range overflow");
 	old_satp = csr_read(CSR_SATP);
 	control_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
 		       (root->root_physical_address >> PAGE_SHIFT);
@@ -57,7 +68,8 @@ void nacc_linux_bootstrap_enter(const struct nacc_bootstrap_descriptor *descript
 					       context_address,
 					       descriptor->bootstrap_sequence,
 					       (unsigned long)current, old_satp,
-					       control_satp);
+					       control_satp, allowed_rx_base,
+					       allowed_rx_size);
 	if (ret)
 		panic("NACC Linux bootstrap session arm failed (%d)", ret);
 
@@ -96,7 +108,8 @@ long nacc_linux_bootstrap_ready(struct pt_regs *regs)
 		.bootstrap_sequence = regs->a2,
 		.handshake_cookie = regs->a3,
 		.current_thread_pointer = (unsigned long)current,
-		.reserved = { regs->a4, regs->a5, regs->a6 },
+		.runtime_entry_address = regs->a4,
+		.reserved = { regs->a5, regs->a6 },
 	};
 	ret = nacc_linux_bootstrap_session_ready_commit(&nacc_linux_session,
 							&request);
@@ -116,10 +129,18 @@ long nacc_linux_bootstrap_ready(struct pt_regs *regs)
 	return 0;
 }
 
+u64 nacc_linux_runtime_entry_snapshot(void)
+{
+	if (!nacc_linux_bootstrap_session_is_ready(&nacc_linux_session))
+		panic("NACC runtime entry is unavailable");
+	return nacc_linux_session.runtime_entry_address;
+}
+
 asmlinkage __visible __noreturn void nacc_linux_bootstrap_complete(void)
 {
 	if (current != nacc_linux_bootstrap_task ||
 	    !nacc_linux_bootstrap_session_is_ready(&nacc_linux_session) ||
+	    !nacc_linux_session.runtime_entry_address ||
 	    csr_read(CSR_SATP) != nacc_linux_session.old_satp ||
 	    (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA))
 		panic("NACC Linux bootstrap continuation invariant failed");

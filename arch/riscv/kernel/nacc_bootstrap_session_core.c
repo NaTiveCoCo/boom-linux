@@ -27,7 +27,9 @@ int nacc_linux_bootstrap_session_arm(
 	nacc_bootstrap_u64 context_address,
 	nacc_bootstrap_u64 bootstrap_sequence,
 	nacc_bootstrap_u64 linux_thread_pointer,
-	nacc_bootstrap_u64 old_satp, nacc_bootstrap_u64 control_satp)
+	nacc_bootstrap_u64 old_satp, nacc_bootstrap_u64 control_satp,
+	nacc_bootstrap_u64 allowed_rx_base,
+	nacc_bootstrap_u64 allowed_rx_size)
 {
 	nacc_bootstrap_u32 expected = NACC_LINUX_SESSION_UNINITIALIZED;
 
@@ -49,7 +51,13 @@ int nacc_linux_bootstrap_session_arm(
 	    !(old_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
 	    !(control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
 	    (old_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ==
-		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK))
+		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
+	    !allowed_rx_base ||
+	    !nacc_linux_session_page_aligned(allowed_rx_base) ||
+	    allowed_rx_size < NACC_LINUX_RUNTIME_ENTRY_INSN_SIZE ||
+	    allowed_rx_base >= NACC_BOOTSTRAP_SV39_USER_LIMIT ||
+	    allowed_rx_size > NACC_BOOTSTRAP_SV39_USER_LIMIT -
+			      allowed_rx_base)
 		return -EINVAL;
 	if (!__atomic_compare_exchange_n(
 		    &session->state, &expected, NACC_LINUX_SESSION_ARMING,
@@ -58,7 +66,8 @@ int nacc_linux_bootstrap_session_arm(
 	if (session->reserved || session->context_address ||
 	    session->context_size || session->bootstrap_sequence ||
 	    session->linux_thread_pointer || session->old_satp ||
-	    session->control_satp ||
+	    session->control_satp || session->allowed_rx_base ||
+	    session->allowed_rx_size || session->runtime_entry_address ||
 	    __atomic_load_n(&session->handshake_cookie, __ATOMIC_ACQUIRE)) {
 		__atomic_store_n(&session->state, NACC_LINUX_SESSION_FAILED,
 				 __ATOMIC_RELEASE);
@@ -71,6 +80,8 @@ int nacc_linux_bootstrap_session_arm(
 	session->linux_thread_pointer = linux_thread_pointer;
 	session->old_satp = old_satp;
 	session->control_satp = control_satp;
+	session->allowed_rx_base = allowed_rx_base;
+	session->allowed_rx_size = allowed_rx_size;
 	__atomic_store_n(&session->state, NACC_LINUX_SESSION_ARMED,
 			 __ATOMIC_RELEASE);
 	return 0;
@@ -92,7 +103,13 @@ int nacc_linux_bootstrap_session_ready_validate(
 	    request->bootstrap_sequence != session->bootstrap_sequence ||
 	    !request->handshake_cookie ||
 	    request->current_thread_pointer != session->linux_thread_pointer ||
-	    request->reserved[0] || request->reserved[1] || request->reserved[2])
+	    !request->runtime_entry_address ||
+	    (request->runtime_entry_address &
+	     (NACC_LINUX_RUNTIME_ENTRY_INSN_SIZE - 1)) ||
+	    request->runtime_entry_address < session->allowed_rx_base ||
+	    request->runtime_entry_address - session->allowed_rx_base >
+		    session->allowed_rx_size - NACC_LINUX_RUNTIME_ENTRY_INSN_SIZE ||
+	    request->reserved[0] || request->reserved[1])
 		return -EINVAL;
 	return 0;
 }
@@ -112,6 +129,7 @@ int nacc_linux_bootstrap_session_ready_commit(
 		    NACC_LINUX_SESSION_ACCEPTING_READY, false,
 		    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 		return -EALREADY;
+	session->runtime_entry_address = request->runtime_entry_address;
 	__atomic_store_n(&session->handshake_cookie,
 			 request->handshake_cookie, __ATOMIC_RELEASE);
 	__atomic_store_n(&session->state, NACC_LINUX_SESSION_READY,
@@ -139,5 +157,5 @@ bool nacc_linux_bootstrap_session_is_ready(
 	return session &&
 	       __atomic_load_n(&session->state, __ATOMIC_ACQUIRE) ==
 		       NACC_LINUX_SESSION_READY &&
-	       session->handshake_cookie;
+		       session->handshake_cookie && session->runtime_entry_address;
 }

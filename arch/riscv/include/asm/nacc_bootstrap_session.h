@@ -13,6 +13,7 @@
 #include <asm/nacc_bootstrap.h>
 
 #define NACC_LINUX_FIRST_ENTRY_CONTEXT_SIZE 400ULL
+#define NACC_LINUX_RUNTIME_ENTRY_INSN_SIZE 4ULL
 #define NACC_LINUX_SESSION_KERNEL_BASE 0xffffffc000000000ULL
 #define NACC_LINUX_SESSION_SATP_MODE_SHIFT 60U
 #define NACC_LINUX_SESSION_SATP_MODE_MASK \
@@ -41,6 +42,9 @@ struct nacc_linux_bootstrap_session {
 	nacc_bootstrap_u64 linux_thread_pointer;
 	nacc_bootstrap_u64 old_satp;
 	nacc_bootstrap_u64 control_satp;
+	nacc_bootstrap_u64 allowed_rx_base;
+	nacc_bootstrap_u64 allowed_rx_size;
+	nacc_bootstrap_u64 runtime_entry_address;
 	nacc_bootstrap_u64 handshake_cookie;
 };
 
@@ -50,7 +54,8 @@ struct nacc_linux_bootstrap_ready_request {
 	nacc_bootstrap_u64 bootstrap_sequence;
 	nacc_bootstrap_u64 handshake_cookie;
 	nacc_bootstrap_u64 current_thread_pointer;
-	nacc_bootstrap_u64 reserved[3];
+	nacc_bootstrap_u64 runtime_entry_address;
+	nacc_bootstrap_u64 reserved[2];
 };
 
 int nacc_linux_bootstrap_session_arm(
@@ -58,7 +63,9 @@ int nacc_linux_bootstrap_session_arm(
 	nacc_bootstrap_u64 context_address,
 	nacc_bootstrap_u64 bootstrap_sequence,
 	nacc_bootstrap_u64 linux_thread_pointer,
-	nacc_bootstrap_u64 old_satp, nacc_bootstrap_u64 control_satp);
+	nacc_bootstrap_u64 old_satp, nacc_bootstrap_u64 control_satp,
+	nacc_bootstrap_u64 allowed_rx_base,
+	nacc_bootstrap_u64 allowed_rx_size);
 int nacc_linux_bootstrap_session_ready_validate(
 	const struct nacc_linux_bootstrap_session *session,
 	const struct nacc_linux_bootstrap_ready_request *request);
@@ -78,6 +85,7 @@ void nacc_linux_bootstrap_enter(
 	const struct nacc_bootstrap_descriptor *descriptor,
 	const struct nacc_root_build_result *root);
 long nacc_linux_bootstrap_ready(struct pt_regs *regs);
+nacc_bootstrap_u64 nacc_linux_runtime_entry_snapshot(void);
 void nacc_linux_bootstrap_resume(void);
 void nacc_linux_bootstrap_complete(void) __noreturn;
 #endif
