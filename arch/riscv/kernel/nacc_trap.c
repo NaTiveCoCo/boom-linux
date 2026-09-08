@@ -88,7 +88,10 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 		if (regs->a0 > 6 || regs->a1 || regs->a2 ||
 		    regs->a3 || regs->a4 || regs->a5 || regs->a6)
 			panic("NACC Agent ENTER trace invariant failed");
-		pr_info("NACC Agent ENTER stage %lu\n", regs->a0);
+		if (regs->a0)
+			pr_info("NACC Agent ENTER stage %lu\n", regs->a0);
+		else
+			pr_info("NACC Agent runtime dispatch\n");
 		regs->a0 = 0;
 		break;
 	default:
