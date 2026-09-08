@@ -28,7 +28,7 @@ int nacc_exec_prepare_elf(const struct nacc_exec_attempt *attempt,
 			  u64 executable_file_size,
 			  u64 executable_memory_size, u64 entry);
 bool nacc_exec_abort(const struct nacc_exec_attempt *attempt);
-void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt);
+int nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt);
 void nacc_exec_activate(const struct nacc_exec_attempt *attempt);
 bool nacc_exec_is_active_current(void);
 void nacc_exec_record_failure(const struct nacc_exec_attempt *attempt,
@@ -83,9 +83,10 @@ static inline bool nacc_exec_abort(const struct nacc_exec_attempt *attempt)
 	return false;
 }
 
-static inline void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
+static inline int nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 {
 	(void)attempt;
+	return 0;
 }
 
 static inline void nacc_exec_activate(const struct nacc_exec_attempt *attempt)

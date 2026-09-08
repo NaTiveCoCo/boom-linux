@@ -54,6 +54,8 @@ struct nacc_prepare_object {
 	struct task_struct *target;
 	struct mm_struct *mm;
 	struct nacc_live_root_handle *live_root;
+	struct nacc_runtime_object_ref runtime_mm_ref;
+	struct nacc_runtime_object_ref runtime_thread_ref;
 	u64 elf_entry_offset;
 	u8 *elf_code_prefix;
 	size_t elf_code_prefix_length;
@@ -61,6 +63,10 @@ struct nacc_prepare_object {
 	bool elf_staging;
 	bool elf_payload_valid;
 	bool exec_attempt_claimed;
+	bool runtime_preparing;
+	bool runtime_attaching;
+	bool runtime_attached;
+	bool runtime_retiring;
 	struct nacc_lifecycle_exec lifecycle;
 	int elf_preflight_errno;
 	int post_ponr_errno;
@@ -105,6 +111,84 @@ static int nacc_agent_runtime_retire(struct nacc_agent_object *agent)
 	    !nacc_runtime_ref_is_zero(result.thread))
 		panic("NACC Agent runtime retire response is invalid");
 	return 0;
+}
+
+static void nacc_runtime_retire_exec_objects(
+	struct nacc_runtime_object_ref agent,
+	struct nacc_runtime_object_ref mm,
+	struct nacc_runtime_object_ref thread, bool attached)
+{
+	struct nacc_runtime_lifecycle_request request = {
+		.opcode = NACC_RUNTIME_TASK_RETIRE_OPCODE,
+		.agent = agent,
+		.mm = attached ? mm : (struct nacc_runtime_object_ref) { 0 },
+		.thread = thread,
+	};
+	struct nacc_runtime_lifecycle_result result;
+	int ret;
+
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	if (ret || result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK)
+		panic("NACC runtime TASK_RETIRE failed (%d)", ret);
+	request = (struct nacc_runtime_lifecycle_request) {
+		.opcode = NACC_RUNTIME_MM_RETIRE_OPCODE,
+		.agent = agent,
+		.mm = mm,
+	};
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	if (ret || result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK)
+		panic("NACC runtime MM_RETIRE failed (%d)", ret);
+}
+
+static int nacc_runtime_create_exec_objects(
+	struct nacc_runtime_object_ref agent,
+	struct nacc_runtime_object_ref *mm,
+	struct nacc_runtime_object_ref *thread)
+{
+	struct nacc_runtime_lifecycle_request request = {
+		.opcode = NACC_RUNTIME_MM_CREATE_OPCODE,
+		.agent = agent,
+	};
+	struct nacc_runtime_lifecycle_result result;
+	int ret;
+
+	if (!mm || !thread || !nacc_runtime_ref_is_zero(*mm) ||
+	    !nacc_runtime_ref_is_zero(*thread))
+		panic("NACC runtime exec create received dirty output");
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	if (ret)
+		return ret;
+	if (result.status == NACC_RUNTIME_LIFECYCLE_STATUS_CAPACITY)
+		return -ENOSPC;
+	if (result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK ||
+	    !nacc_runtime_ref_equal(result.agent, agent) ||
+	    nacc_runtime_ref_is_zero(result.mm) ||
+	    !nacc_runtime_ref_is_zero(result.thread))
+		panic("NACC runtime MM_CREATE response is invalid");
+	*mm = result.mm;
+
+	request.opcode = NACC_RUNTIME_TASK_CREATE_OPCODE;
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	if (!ret && result.status == NACC_RUNTIME_LIFECYCLE_STATUS_OK) {
+		if (!nacc_runtime_ref_equal(result.agent, agent) ||
+		    !nacc_runtime_ref_is_zero(result.mm) ||
+		    nacc_runtime_ref_is_zero(result.thread))
+			panic("NACC runtime TASK_CREATE response is invalid");
+		*thread = result.thread;
+		return 0;
+	}
+	if (!ret && result.status != NACC_RUNTIME_LIFECYCLE_STATUS_CAPACITY)
+		panic("NACC runtime TASK_CREATE status is invalid");
+	request = (struct nacc_runtime_lifecycle_request) {
+		.opcode = NACC_RUNTIME_MM_RETIRE_OPCODE,
+		.agent = agent,
+		.mm = *mm,
+	};
+	if (nacc_linux_runtime_lifecycle_call(&request, &result) ||
+	    result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK)
+		panic("NACC runtime MM_CREATE rollback failed");
+	*mm = (struct nacc_runtime_object_ref) { 0 };
+	return ret ? ret : -ENOSPC;
 }
 
 static void nacc_agent_runtime_retire_worker(struct work_struct *work)
@@ -185,6 +269,10 @@ static void nacc_prepare_free(struct kref *reference)
 	    prepare->live_root ||
 	    prepare->elf_preflight_claimed || prepare->elf_staging ||
 	    prepare->exec_attempt_claimed ||
+	    prepare->runtime_preparing || prepare->runtime_attaching ||
+	    prepare->runtime_attached || prepare->runtime_retiring ||
+	    !nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+	    !nacc_runtime_ref_is_zero(prepare->runtime_thread_ref) ||
 	    prepare->elf_preflight_errno ||
 	    prepare->elf_payload_valid != !!prepare->elf_code_prefix ||
 	    (prepare->elf_payload_valid && !prepare->elf_code_prefix_length))
@@ -494,6 +582,9 @@ out_unlock:
 int nacc_exec_commit(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
+	struct nacc_runtime_object_ref agent_ref;
+	struct nacc_runtime_object_ref mm_ref = { 0 };
+	struct nacc_runtime_object_ref thread_ref = { 0 };
 	int ret = 0;
 
 	mutex_lock(&nacc_object_lock);
@@ -508,11 +599,63 @@ int nacc_exec_commit(const struct nacc_exec_attempt *attempt)
 		ret = nacc_prepare_reserve_minimal_live_root(prepare);
 		if (ret)
 			goto out_unlock;
+		if (prepare->runtime_preparing || prepare->runtime_attaching ||
+		    prepare->runtime_attached || prepare->runtime_retiring ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_thread_ref))
+			panic("NACC first exec commit found runtime state");
+		prepare->runtime_preparing = true;
+		agent_ref = prepare->agent->runtime_ref;
+		mutex_unlock(&nacc_object_lock);
+		ret = nacc_runtime_create_exec_objects(
+			agent_ref, &mm_ref, &thread_ref);
+		mutex_lock(&nacc_object_lock);
+		if (nacc_attempt_prepare_locked(attempt) != prepare ||
+		    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_PREPARED ||
+		    !prepare->runtime_preparing || prepare->runtime_attaching ||
+		    prepare->runtime_attached || prepare->runtime_retiring ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_thread_ref) ||
+		    !nacc_runtime_ref_equal(prepare->agent->runtime_ref,
+					    agent_ref))
+			panic("NACC runtime exec create lost ownership");
+		prepare->runtime_preparing = false;
+		if (ret) {
+			if (!nacc_runtime_ref_is_zero(mm_ref) ||
+			    !nacc_runtime_ref_is_zero(thread_ref))
+				panic("NACC failed runtime exec create retained identity");
+			nacc_live_root_release_unpublished(prepare->live_root);
+			prepare->live_root = NULL;
+			goto out_unlock;
+		}
+		prepare->runtime_mm_ref = mm_ref;
+		prepare->runtime_thread_ref = thread_ref;
 		ret = nacc_lifecycle_commit_exec(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
 			nacc_target_identity(current),
 			prepare->lifecycle.prepare_generation);
 		if (ret) {
+			if (ret != -ESHUTDOWN)
+				panic("NACC runtime-backed exec commit failed (%d)",
+				      ret);
+			/* Agent destroy 可与锁外 AS create 合法竞态。 */
+			prepare->runtime_retiring = true;
+			mutex_unlock(&nacc_object_lock);
+			nacc_runtime_retire_exec_objects(
+				agent_ref, mm_ref, thread_ref, false);
+			mutex_lock(&nacc_object_lock);
+			if (nacc_attempt_prepare_locked(attempt) != prepare ||
+			    !prepare->runtime_retiring ||
+			    !nacc_runtime_ref_equal(prepare->runtime_mm_ref,
+						    mm_ref) ||
+			    !nacc_runtime_ref_equal(prepare->runtime_thread_ref,
+						    thread_ref))
+				panic("NACC failed exec commit rollback lost ownership");
+			prepare->runtime_mm_ref =
+				(struct nacc_runtime_object_ref) { 0 };
+			prepare->runtime_thread_ref =
+				(struct nacc_runtime_object_ref) { 0 };
+			prepare->runtime_retiring = false;
 			nacc_live_root_release_unpublished(prepare->live_root);
 			prepare->live_root = NULL;
 		}
@@ -570,10 +713,13 @@ bool nacc_exec_abort(const struct nacc_exec_attempt *attempt)
 	return true;
 }
 
-void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
+int nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
 	struct mm_struct *old_mm = NULL;
+	struct nacc_runtime_lifecycle_request request;
+	struct nacc_runtime_lifecycle_result result;
+	int ret;
 
 	if (!current->mm)
 		panic("NACC exec installed a missing mm");
@@ -581,7 +727,7 @@ void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 	prepare = nacc_attempt_prepare_locked(attempt);
 	if (!prepare) {
 		mutex_unlock(&nacc_object_lock);
-		return;
+		return 0;
 	}
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED) {
 		if (prepare->mm)
@@ -596,9 +742,38 @@ void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 	}
 	mmget(current->mm);
 	prepare->mm = current->mm;
+	if (prepare->runtime_preparing || prepare->runtime_attaching ||
+	    prepare->runtime_attached || prepare->runtime_retiring ||
+	    nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+	    nacc_runtime_ref_is_zero(prepare->runtime_thread_ref))
+		panic("NACC exec mm bind found invalid runtime state");
+	prepare->runtime_attaching = true;
+	request = (struct nacc_runtime_lifecycle_request) {
+		.opcode = NACC_RUNTIME_TASK_ATTACH_OPCODE,
+		.agent = prepare->agent->runtime_ref,
+		.mm = prepare->runtime_mm_ref,
+		.thread = prepare->runtime_thread_ref,
+	};
+	mutex_unlock(&nacc_object_lock);
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	mutex_lock(&nacc_object_lock);
+	if (nacc_attempt_prepare_locked(attempt) != prepare ||
+	    prepare->mm != current->mm || !prepare->runtime_attaching ||
+	    prepare->runtime_attached || prepare->runtime_retiring ||
+	    !nacc_runtime_ref_equal(prepare->agent->runtime_ref, request.agent) ||
+	    !nacc_runtime_ref_equal(prepare->runtime_mm_ref, request.mm) ||
+	    !nacc_runtime_ref_equal(prepare->runtime_thread_ref, request.thread))
+		panic("NACC runtime TASK_ATTACH lost ownership");
+	prepare->runtime_attaching = false;
+	if (!ret) {
+		if (result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK)
+			panic("NACC runtime TASK_ATTACH status is invalid");
+		prepare->runtime_attached = true;
+	}
 	mutex_unlock(&nacc_object_lock);
 	if (old_mm)
 		mmput(old_mm);
+	return ret;
 }
 
 void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
@@ -614,6 +789,9 @@ void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 	}
 	if (prepare->mm != current->mm)
 		panic("NACC exec activation found an invalid mm binding");
+	if (!prepare->runtime_attached || prepare->runtime_preparing ||
+	    prepare->runtime_attaching || prepare->runtime_retiring)
+		panic("NACC exec activation found invalid runtime state");
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_COMMITTED)
 		ret = nacc_lifecycle_activate(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
@@ -672,7 +850,11 @@ void nacc_exec_record_failure(const struct nacc_exec_attempt *attempt,
 void nacc_exec_exit_current(void)
 {
 	struct nacc_prepare_object *prepare;
+	struct nacc_runtime_object_ref agent_ref;
+	struct nacc_runtime_object_ref mm_ref;
+	struct nacc_runtime_object_ref thread_ref;
 	struct mm_struct *mm;
+	bool runtime_attached;
 	u64 generation;
 	u64 target;
 	int ret;
@@ -689,6 +871,11 @@ void nacc_exec_exit_current(void)
 	prepare->elf_staging = false;
 	prepare->elf_preflight_errno = 0;
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
+		if (prepare->runtime_preparing || prepare->runtime_attaching ||
+		    prepare->runtime_attached || prepare->runtime_retiring ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+		    !nacc_runtime_ref_is_zero(prepare->runtime_thread_ref))
+			panic("NACC PREPARED exit retained runtime state");
 		ret = nacc_lifecycle_abort_prepare(&prepare->agent->lifecycle,
 						   &prepare->lifecycle,
 						   target, generation);
@@ -700,23 +887,52 @@ void nacc_exec_exit_current(void)
 		ret = nacc_lifecycle_target_failed_and_exited(
 			&prepare->agent->lifecycle, &prepare->lifecycle, target,
 			generation, prepare->post_ponr_errno);
-		if (!ret)
-			ret = nacc_lifecycle_retire_exec(
-				&prepare->agent->lifecycle, &prepare->lifecycle,
-				target, generation);
 	} else if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
 		ret = nacc_lifecycle_target_exited(
 			&prepare->agent->lifecycle, &prepare->lifecycle, target,
 			generation);
-		if (!ret)
-			ret = nacc_lifecycle_retire_exec(
-				&prepare->agent->lifecycle, &prepare->lifecycle,
-				target, generation);
 	} else {
 		panic("NACC task exit found invalid transaction state");
 	}
 	if (ret)
 		panic("NACC task exit transition failed (%d)", ret);
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_FAILED ||
+	    prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_EXITED) {
+		if (prepare->runtime_preparing || prepare->runtime_attaching ||
+		    prepare->runtime_retiring ||
+		    nacc_runtime_ref_is_zero(prepare->runtime_mm_ref) ||
+		    nacc_runtime_ref_is_zero(prepare->runtime_thread_ref))
+			panic("NACC task exit found invalid runtime identity");
+		prepare->runtime_retiring = true;
+		agent_ref = prepare->agent->runtime_ref;
+		mm_ref = prepare->runtime_mm_ref;
+		thread_ref = prepare->runtime_thread_ref;
+		runtime_attached = prepare->runtime_attached;
+		mutex_unlock(&nacc_object_lock);
+		nacc_runtime_retire_exec_objects(
+			agent_ref, mm_ref, thread_ref, runtime_attached);
+		mutex_lock(&nacc_object_lock);
+		if (nacc_find_prepare_locked(current) != prepare ||
+		    !prepare->runtime_retiring || prepare->runtime_preparing ||
+		    prepare->runtime_attaching ||
+		    !nacc_runtime_ref_equal(prepare->agent->runtime_ref,
+					    agent_ref) ||
+		    !nacc_runtime_ref_equal(prepare->runtime_mm_ref, mm_ref) ||
+		    !nacc_runtime_ref_equal(prepare->runtime_thread_ref,
+					    thread_ref))
+			panic("NACC task runtime retire lost ownership");
+		prepare->runtime_mm_ref =
+			(struct nacc_runtime_object_ref) { 0 };
+		prepare->runtime_thread_ref =
+			(struct nacc_runtime_object_ref) { 0 };
+		prepare->runtime_attached = false;
+		prepare->runtime_retiring = false;
+		ret = nacc_lifecycle_retire_exec(
+			&prepare->agent->lifecycle, &prepare->lifecycle,
+			target, generation);
+		if (ret)
+			panic("NACC task local retire failed (%d)", ret);
+	}
 	mm = prepare->mm;
 	prepare->mm = NULL;
 	list_del_init(&prepare->list);
