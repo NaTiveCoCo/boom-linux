@@ -49,9 +49,13 @@ struct nacc_prepare_object {
 	struct mm_struct *mm;
 	struct nacc_live_root_handle *live_root;
 	u64 elf_entry_offset;
+	u8 *elf_code_prefix;
 	size_t elf_code_prefix_length;
+	bool elf_preflight_claimed;
+	bool elf_staging;
 	bool elf_payload_valid;
 	struct nacc_lifecycle_exec lifecycle;
+	int elf_preflight_errno;
 	int post_ponr_errno;
 };
 
@@ -98,10 +102,15 @@ static void nacc_prepare_free(struct kref *reference)
 
 	if (!list_empty(&prepare->list) ||
 	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY || prepare->mm ||
-	    prepare->live_root)
+	    prepare->live_root ||
+	    prepare->elf_preflight_claimed || prepare->elf_staging ||
+	    prepare->elf_preflight_errno ||
+	    prepare->elf_payload_valid != !!prepare->elf_code_prefix ||
+	    (prepare->elf_payload_valid && !prepare->elf_code_prefix_length))
 		panic("NACC freeing live prepare object");
 	put_task_struct(prepare->target);
 	kref_put(&prepare->agent->reference, nacc_agent_free);
+	kfree(prepare->elf_code_prefix);
 	kfree(prepare);
 }
 
@@ -116,7 +125,7 @@ static int nacc_prepare_release(struct inode *inode, struct file *file)
 	mutex_lock(&nacc_object_lock);
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
 		/* ELF preflight 后 transaction 已由 target 接管，不能由 FD close 撤销。 */
-		if (!prepare->elf_payload_valid) {
+		if (!prepare->elf_preflight_claimed) {
 			ret = nacc_lifecycle_abort_prepare(
 				&prepare->agent->lifecycle, &prepare->lifecycle,
 				target, generation);
@@ -206,7 +215,9 @@ static int nacc_prepare_reserve_minimal_live_root(
 		nacc_root_result_snapshot(), &request);
 }
 
-int nacc_exec_prepare_elf_current(bool fixed_executable,
+int nacc_exec_prepare_elf_current(struct file *executable,
+				  bool fixed_executable,
+				  bool direct_executable,
 				  bool has_interpreter, u32 load_segment_count,
 				  u32 executable_load_segment_count,
 				  u32 executable_flags,
@@ -217,6 +228,7 @@ int nacc_exec_prepare_elf_current(bool fixed_executable,
 {
 	const struct nacc_enter_elf_metadata metadata = {
 		.fixed_executable = fixed_executable,
+		.direct_executable = direct_executable,
 		.has_interpreter = has_interpreter,
 		.load_segment_count = load_segment_count,
 		.executable_load_segment_count = executable_load_segment_count,
@@ -228,6 +240,9 @@ int nacc_exec_prepare_elf_current(bool fixed_executable,
 		.entry = entry,
 	};
 	struct nacc_prepare_object *prepare;
+	u8 *code_prefix;
+	loff_t read_position;
+	ssize_t bytes_read;
 	u64 entry_offset;
 	size_t code_prefix_length;
 	int ret = 0;
@@ -242,21 +257,81 @@ int nacc_exec_prepare_elf_current(bool fixed_executable,
 	}
 	if (prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_PREPARED)
 		panic("NACC ELF preflight found invalid transaction state");
+	if (prepare->elf_preflight_claimed) {
+		if (prepare->elf_preflight_errno) {
+			ret = prepare->elf_preflight_errno;
+			goto out_unlock;
+		}
+		if (prepare->elf_staging)
+			panic("NACC ELF preflight reentered file staging");
+		if (!prepare->elf_payload_valid)
+			panic("NACC ELF preflight claim has no result");
+	} else {
+		/* 任意 preflight error 返回到 generation cleanup 前都禁止 replacement。 */
+		prepare->elf_preflight_claimed = true;
+	}
 	ret = nacc_enter_elf_metadata_validate(
 		&metadata, &entry_offset, &code_prefix_length);
 	if (ret)
-		goto out_unlock;
+		goto out_claim_error;
+	if (!executable) {
+		ret = -EINVAL;
+		goto out_claim_error;
+	}
 	if (prepare->elf_payload_valid) {
-		if (prepare->elf_entry_offset == entry_offset &&
-		    prepare->elf_code_prefix_length == code_prefix_length)
-			goto out_unlock;
+		/* 新 exec attempt 不得按相同 metadata 复用旧 executable bytes。 */
 		ret = -ESTALE;
 		goto out_unlock;
 	}
+	code_prefix = kmalloc(code_prefix_length, GFP_KERNEL);
+	if (!code_prefix) {
+		ret = -ENOMEM;
+		goto out_claim_error;
+	}
+	/*
+	 * validator 将读取限制在单页内。占位禁止 FD close 后为同一 target
+	 * 安装 replacement prepare；kref 保护解锁后的 transaction storage。
+	 */
+	prepare->elf_staging = true;
+	kref_get(&prepare->reference);
+	mutex_unlock(&nacc_object_lock);
+	read_position = executable_file_offset;
+	bytes_read = kernel_read(executable, code_prefix, code_prefix_length,
+				 &read_position);
+	mutex_lock(&nacc_object_lock);
+	if (nacc_find_prepare_locked(current) != prepare ||
+	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_PREPARED ||
+	    !prepare->elf_preflight_claimed || !prepare->elf_staging ||
+	    prepare->elf_payload_valid || prepare->elf_preflight_errno)
+		panic("NACC ELF staging lost transaction ownership");
+	if (bytes_read < 0 || (size_t)bytes_read != code_prefix_length) {
+		/* -ERESTARTNOINTR 会跳过 exec abort；改为可清理 transaction 的错误。 */
+		if (bytes_read < 0)
+			ret = bytes_read == -ERESTARTNOINTR ? -EINTR :
+				(int)bytes_read;
+		else
+			ret = -EIO;
+		prepare->elf_preflight_errno = ret;
+		prepare->elf_staging = false;
+		kfree(code_prefix);
+		goto out_put;
+	}
+	prepare->elf_staging = false;
 	prepare->elf_entry_offset = entry_offset;
+	prepare->elf_code_prefix = code_prefix;
 	prepare->elf_code_prefix_length = code_prefix_length;
 	prepare->elf_payload_valid = true;
 
+out_put:
+	mutex_unlock(&nacc_object_lock);
+	kref_put(&prepare->reference, nacc_prepare_free);
+	return ret;
+
+out_claim_error:
+	if (!ret || !prepare->elf_preflight_claimed ||
+	    prepare->elf_preflight_errno)
+		panic("NACC ELF preflight error state is invalid");
+	prepare->elf_preflight_errno = ret;
 out_unlock:
 	mutex_unlock(&nacc_object_lock);
 	return ret;
@@ -319,6 +394,9 @@ bool nacc_exec_abort_current(void)
 		mutex_unlock(&nacc_object_lock);
 		return false;
 	}
+	prepare->elf_preflight_claimed = false;
+	prepare->elf_staging = false;
+	prepare->elf_preflight_errno = 0;
 	ret = nacc_lifecycle_abort_prepare(
 		&prepare->agent->lifecycle, &prepare->lifecycle,
 		nacc_target_identity(current),
@@ -448,6 +526,9 @@ void nacc_exec_exit_current(void)
 	}
 	target = nacc_target_identity(current);
 	generation = prepare->lifecycle.prepare_generation;
+	prepare->elf_preflight_claimed = false;
+	prepare->elf_staging = false;
+	prepare->elf_preflight_errno = 0;
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
 		ret = nacc_lifecycle_abort_prepare(&prepare->agent->lifecycle,
 						   &prepare->lifecycle,

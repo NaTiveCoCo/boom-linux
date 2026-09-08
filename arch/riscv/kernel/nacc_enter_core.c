@@ -21,7 +21,8 @@ int nacc_enter_elf_metadata_validate(
 
 	if (!metadata || !entry_offset || !code_prefix_length)
 		return -EINVAL;
-	if (!metadata->fixed_executable || metadata->has_interpreter ||
+	if (!metadata->fixed_executable || !metadata->direct_executable ||
+	    metadata->has_interpreter ||
 	    metadata->load_segment_count != 1 ||
 	    metadata->executable_load_segment_count != 1 ||
 	    metadata->executable_flags != NACC_ENTER_ELF_FLAGS ||

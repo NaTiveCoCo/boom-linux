@@ -106,6 +106,7 @@ struct nacc_enter_message_request {
 
 struct nacc_enter_elf_metadata {
 	bool fixed_executable;
+	bool direct_executable;
 	bool has_interpreter;
 	nacc_enter_u32 load_segment_count;
 	nacc_enter_u32 executable_load_segment_count;

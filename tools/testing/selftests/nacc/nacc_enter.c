@@ -50,6 +50,7 @@ int main(void)
 	struct nacc_enter_message_request request;
 	struct nacc_enter_elf_metadata elf = {
 		.fixed_executable = true,
+		.direct_executable = true,
 		.load_segment_count = 1,
 		.executable_load_segment_count = 1,
 		.executable_flags = 5,
@@ -63,7 +64,7 @@ int main(void)
 	size_t elf_prefix_length = 0;
 	int ret;
 
-	printf("TAP version 13\n1..21\n");
+	printf("TAP version 13\n1..22\n");
 	ret = nacc_enter_elf_metadata_validate(&elf, &elf_entry_offset,
 					       &elf_prefix_length);
 	report_contract(!ret && elf_entry_offset == 0xe8 &&
@@ -75,6 +76,12 @@ int main(void)
 				-ENOEXEC,
 			"PIE ELF is rejected");
 	elf.fixed_executable = true;
+	elf.direct_executable = false;
+	report_contract(nacc_enter_elf_metadata_validate(
+				&elf, &elf_entry_offset, &elf_prefix_length) ==
+				-ENOEXEC,
+			"binfmt-rewritten executable is rejected");
+	elf.direct_executable = true;
 	elf.has_interpreter = true;
 	report_contract(nacc_enter_elf_metadata_validate(
 				&elf, &elf_entry_offset, &elf_prefix_length) ==

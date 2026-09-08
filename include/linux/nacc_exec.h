@@ -5,9 +5,13 @@
 
 #include <linux/types.h>
 
+struct file;
+
 #ifdef CONFIG_NACC
 int nacc_exec_commit_current(void);
-int nacc_exec_prepare_elf_current(bool fixed_executable, bool has_interpreter,
+int nacc_exec_prepare_elf_current(struct file *executable,
+				  bool fixed_executable, bool direct_executable,
+				  bool has_interpreter,
 				  u32 load_segment_count,
 				  u32 executable_load_segment_count,
 				  u32 executable_flags,
@@ -28,12 +32,15 @@ static inline int nacc_exec_commit_current(void)
 }
 
 static inline int nacc_exec_prepare_elf_current(
-	bool fixed_executable, bool has_interpreter, u32 load_segment_count,
+	struct file *executable, bool fixed_executable, bool direct_executable,
+	bool has_interpreter, u32 load_segment_count,
 	u32 executable_load_segment_count, u32 executable_flags,
 	u64 executable_file_offset, u64 executable_virtual_address,
 	u64 executable_file_size, u64 executable_memory_size, u64 entry)
 {
+	(void)executable;
 	(void)fixed_executable;
+	(void)direct_executable;
 	(void)has_interpreter;
 	(void)load_segment_count;
 	(void)executable_load_segment_count;
