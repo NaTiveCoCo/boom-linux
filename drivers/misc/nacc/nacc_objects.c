@@ -29,8 +29,6 @@
 
 #include "nacc_internal.h"
 
-/* 当前固定 code/stack payload 与 management mappings 的已测试上界。 */
-#define NACC_MINIMAL_LIVE_PTP_PAGES 12ULL
 #define NACC_MINIMAL_PAYLOAD_MAPPINGS 2U
 
 struct nacc_agent_object {
@@ -438,7 +436,7 @@ static int nacc_prepare_build_minimal_live_root(
 {
 	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1 };
 	const struct nacc_live_root_layout_request request = {
-		.ptp_page_count = NACC_MINIMAL_LIVE_PTP_PAGES,
+		.ptp_page_count = NACC_LIVE_ROOT_FIRST_AU_PTP_PAGES,
 		.payload_page_counts = payload_page_counts,
 		.payload_mapping_count = NACC_MINIMAL_PAYLOAD_MAPPINGS,
 	};

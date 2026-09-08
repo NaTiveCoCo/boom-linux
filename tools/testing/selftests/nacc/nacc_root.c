@@ -170,6 +170,89 @@ static void report_contract(bool condition, const char *name)
 		ksft_test_result_fail("%s\n", name);
 }
 
+static void test_production_live_pool(void)
+{
+	struct nacc_bootstrap_physical_layout layout;
+	struct nacc_bootstrap_descriptor descriptor;
+	struct nacc_agent_image_metadata image;
+	struct nacc_root_build_result control_result = {};
+	struct nacc_root_build_result live_result = {};
+	struct nacc_live_root_layout_request live_request;
+	struct nacc_live_root_layout_result live_layout = {};
+	struct nacc_root_user_mapping mappings[2];
+	struct nacc_root_live_config live_config;
+	struct nacc_root_backend backend;
+	struct fake_page_store store;
+	uint64_t payload_page_counts[2] = { 1, 1 };
+	uint64_t high[256] = {};
+	int ret;
+
+	initialize_layout(&layout);
+	initialize_image(&image);
+	layout.bitmap_target.size = UINT64_C(0x04000000);
+	layout.nacc_pool.base = layout.bitmap_target.base + UINT64_C(0x02000000);
+	layout.nacc_pool.size = UINT64_C(0x02000000);
+	layout.control_root_l0.base = layout.nacc_pool.base;
+	ret = nacc_bootstrap_descriptor_build(&descriptor, &layout, 1);
+	if (ret)
+		ksft_exit_fail_msg("production fixture descriptor failed: %d\n",
+				   ret);
+	store = (struct fake_page_store) {
+		.base = layout.nacc_pool.base,
+		.size = layout.nacc_pool.size,
+		.bytes = calloc(1, layout.nacc_pool.size),
+	};
+	if (!store.bytes)
+		ksft_exit_fail_msg("cannot allocate production fake page store\n");
+	backend = (struct nacc_root_backend) {
+		.zero_page = fake_zero_page,
+		.read_pte = fake_read_pte,
+		.write_pte = fake_write_pte,
+		.opaque = &store,
+	};
+	ret = nacc_root_build(&control_result, &layout, &descriptor, &image,
+			      high, &backend);
+	report_contract(!ret, "production-size control root is built");
+	live_request = (struct nacc_live_root_layout_request) {
+		.ptp_page_count = NACC_LIVE_ROOT_FIRST_AU_PTP_PAGES,
+		.payload_page_counts = payload_page_counts,
+		.payload_mapping_count = 2,
+	};
+	ret = nacc_live_root_layout_plan(&live_layout, &layout, &control_result,
+					 &live_request);
+	if (ret)
+		ksft_exit_fail_msg("production live layout failed: %d\n", ret);
+	mappings[0] = (struct nacc_root_user_mapping) {
+		.virtual_base = UINT64_C(0x00010000),
+		.physical_base = live_layout.payload_bases[0],
+		.page_count = 1,
+		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_EXECUTE |
+			NACC_ROOT_PTE_USER,
+	};
+	mappings[1] = (struct nacc_root_user_mapping) {
+		.virtual_base = UINT64_C(0x00020000),
+		.physical_base = live_layout.payload_bases[1],
+		.page_count = 1,
+		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_WRITE |
+			NACC_ROOT_PTE_USER,
+	};
+	live_config = (struct nacc_root_live_config) {
+		.root_physical_address = live_layout.ptp_base,
+		.ptp_pool_base = live_layout.ptp_base,
+		.ptp_pool_size = live_layout.ptp_size,
+		.control_root = &control_result,
+		.user_mappings = mappings,
+		.user_mapping_count = 2,
+	};
+	ret = nacc_root_build_live(&live_result, &layout, &descriptor, &image,
+				   high, &live_config, &backend);
+	report_contract(!ret && live_result.lower_ptp_count + 1 > 12 &&
+				 live_result.lower_ptp_count + 1 <=
+				 live_request.ptp_page_count,
+			"64-page budget builds the production-size live root");
+	free(store.bytes);
+}
+
 int main(void)
 {
 	struct nacc_bootstrap_physical_layout layout;
@@ -189,10 +272,11 @@ int main(void)
 	uint64_t pte;
 	size_t index;
 	int ret;
-	int plan = 38;
+	int plan = 40;
 
 	ksft_print_header();
 	ksft_set_plan(plan);
+	test_production_live_pool();
 	initialize_layout(&layout);
 	initialize_image(&image);
 	ret = nacc_bootstrap_descriptor_build(&descriptor, &layout, 1);

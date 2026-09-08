@@ -18,6 +18,9 @@ struct nacc_live_root_layout_request {
 	size_t payload_mapping_count;
 };
 
+/* 当前固定七类 leaf geometry 在 production 32 MiB pool 下的已测试上界。 */
+#define NACC_LIVE_ROOT_FIRST_AU_PTP_PAGES 64ULL
+
 struct nacc_live_root_layout_result {
 	nacc_bootstrap_u64 ptp_base;
 	nacc_bootstrap_u64 ptp_size;
