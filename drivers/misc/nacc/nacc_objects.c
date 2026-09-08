@@ -836,6 +836,55 @@ void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 	mutex_unlock(&nacc_object_lock);
 }
 
+void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
+		     unsigned long entry, unsigned long stack_pointer)
+{
+	const struct nacc_bootstrap_physical_layout *physical_layout;
+	const struct nacc_live_root_layout_result *layout;
+	const struct nacc_root_build_result *root;
+	struct nacc_prepare_object *prepare;
+	struct nacc_enter_message_request request;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_attempt_prepare_locked(attempt);
+	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return;
+	}
+	if (prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_ACTIVE ||
+	    prepare->mm != current->mm || !prepare->runtime_attached ||
+	    prepare->runtime_preparing || prepare->runtime_attaching ||
+	    prepare->runtime_retiring || !prepare->live_root ||
+	    !prepare->elf_payload_valid || !prepare->elf_code_prefix ||
+	    !prepare->elf_code_prefix_length || !entry || !stack_pointer ||
+	    entry != NACC_ENTER_CODE_VIRTUAL_ADDRESS +
+			 prepare->elf_entry_offset)
+		panic("NACC exec ENTER object invariant failed");
+	physical_layout = nacc_bootstrap_physical_layout_snapshot();
+	layout = nacc_live_root_layout_snapshot(prepare->live_root);
+	root = nacc_live_root_result_snapshot(prepare->live_root);
+	if (root->root_physical_address != layout->ptp_base ||
+	    root->lower_ptp_count == U64_MAX ||
+	    root->lower_ptp_count + 1 > layout->ptp_size / PAGE_SIZE)
+		panic("NACC exec ENTER live root invariant failed");
+	request = (struct nacc_enter_message_request) {
+		.pool_base = physical_layout->nacc_pool.base,
+		.pool_size = physical_layout->nacc_pool.size,
+		.live_root_physical_address = root->root_physical_address,
+		.ptp_page_count = root->lower_ptp_count + 1,
+		.code_physical_address = layout->payload_bases[0],
+		.stack_physical_address = layout->payload_bases[1],
+		.entry_offset = prepare->elf_entry_offset,
+		.agent_handle = prepare->agent->runtime_ref.handle,
+		.mm_handle = prepare->runtime_mm_ref.handle,
+		.thread_handle = prepare->runtime_thread_ref.handle,
+		.code_prefix = prepare->elf_code_prefix,
+		.code_prefix_length = prepare->elf_code_prefix_length,
+	};
+	mutex_unlock(&nacc_object_lock);
+	nacc_linux_runtime_exec_enter(&request);
+}
+
 bool nacc_exec_is_active_current(void)
 {
 	struct nacc_prepare_object *prepare;

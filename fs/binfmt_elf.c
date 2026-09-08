@@ -1370,6 +1370,7 @@ out_free_interp:
 
 	finalize_exec(bprm);
 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+	nacc_exec_enter(bprm->nacc_exec_attempt, regs->epc, regs->sp);
 	retval = 0;
 out:
 	return retval;

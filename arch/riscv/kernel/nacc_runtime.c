@@ -39,6 +39,7 @@ static struct nacc_linux_runtime_session nacc_linux_runtime_session
 	__aligned(NACC_ENTER_MAILBOX_SIZE);
 static struct task_struct *nacc_linux_runtime_task;
 static struct nacc_linux_runtime_call *nacc_linux_runtime_call;
+static struct task_struct *nacc_linux_runtime_enter_task;
 
 static unsigned long nacc_linux_runtime_stack_top(struct task_struct *task)
 {
@@ -175,6 +176,64 @@ int nacc_linux_runtime_lifecycle_call(
 out_unlock:
 	mutex_unlock(&nacc_linux_runtime_mutex);
 	return ret;
+}
+
+void __noreturn nacc_linux_runtime_exec_enter(
+	const struct nacc_enter_message_request *request)
+{
+	const struct nacc_bootstrap_descriptor *descriptor;
+	const struct nacc_root_build_result *root;
+	struct nacc_enter_message_request active_request;
+	void __iomem *mailbox_alias;
+	void *request_page;
+	u64 control_satp;
+	unsigned long stack_top;
+	int ret;
+
+	if (!request || request->sequence || current->flags & PF_KTHREAD ||
+	    num_online_cpus() != 1 || raw_smp_processor_id() != 0)
+		panic("NACC exec ENTER caller invariant failed");
+	active_request = *request;
+	mutex_lock(&nacc_linux_runtime_mutex);
+	nacc_linux_runtime_session_require_idle();
+	if (READ_ONCE(nacc_linux_runtime_task) ||
+	    READ_ONCE(nacc_linux_runtime_call) ||
+	    READ_ONCE(nacc_linux_runtime_enter_task))
+		panic("NACC exec ENTER found stale runtime ownership");
+	active_request.sequence = nacc_linux_runtime_session.next_sequence;
+	descriptor = nacc_root_descriptor_snapshot();
+	root = nacc_root_result_snapshot();
+	control_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
+		(root->root_physical_address >> PAGE_SHIFT);
+	request_page = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
+	if (!request_page)
+		panic("NACC exec ENTER request allocation failed");
+	ret = nacc_enter_message_build(request_page, PAGE_SIZE,
+				       &active_request);
+	if (ret)
+		panic("NACC exec ENTER message build failed (%d)", ret);
+	mailbox_alias = ioremap_prot(descriptor->mailbox.base, PAGE_SIZE,
+				     _PAGE_KERNEL);
+	if (!mailbox_alias)
+		panic("NACC exec ENTER mailbox mapping failed");
+	WRITE_ONCE(nacc_linux_runtime_enter_task, current);
+	memcpy_toio(mailbox_alias, request_page, PAGE_SIZE);
+	/* Agent acquire 只能在 owner 与完整 ENTER page 都已发布后运行。 */
+	mb();
+	iounmap(mailbox_alias);
+	free_page((unsigned long)request_page);
+
+	local_irq_disable();
+	if ((csr_read(CSR_SATP) & NACC_LINUX_SESSION_SATP_MODE_MASK) !=
+		    NACC_LINUX_SESSION_SATP_MODE_SV39 ||
+	    (csr_read(CSR_SATP) & NACC_LINUX_SESSION_SATP_PPN_MASK) ==
+		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
+	    (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA))
+		panic("NACC exec ENTER handoff state invariant failed");
+	stack_top = nacc_linux_runtime_stack_top(current);
+	current->thread_info.kernel_sp = stack_top;
+	nacc_linux_runtime_enter(nacc_linux_runtime_entry_snapshot(),
+				 control_satp);
 }
 
 void nacc_linux_runtime_response(struct pt_regs *regs)

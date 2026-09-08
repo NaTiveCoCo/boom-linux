@@ -30,6 +30,8 @@ int nacc_exec_prepare_elf(const struct nacc_exec_attempt *attempt,
 bool nacc_exec_abort(const struct nacc_exec_attempt *attempt);
 int nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt);
 void nacc_exec_activate(const struct nacc_exec_attempt *attempt);
+void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
+		     unsigned long entry, unsigned long stack_pointer);
 bool nacc_exec_is_active_current(void);
 void nacc_exec_record_failure(const struct nacc_exec_attempt *attempt,
 			      int failure_errno);
@@ -92,6 +94,15 @@ static inline int nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 static inline void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 {
 	(void)attempt;
+}
+
+static inline void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
+			   unsigned long entry,
+			   unsigned long stack_pointer)
+{
+	(void)attempt;
+	(void)entry;
+	(void)stack_pointer;
 }
 
 static inline bool nacc_exec_is_active_current(void)

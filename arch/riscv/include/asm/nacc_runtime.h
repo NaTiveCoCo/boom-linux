@@ -16,6 +16,8 @@ bool nacc_linux_runtime_is_ready(void);
 int nacc_linux_runtime_lifecycle_call(
 	const struct nacc_runtime_lifecycle_request *request,
 	struct nacc_runtime_lifecycle_result *result);
+void nacc_linux_runtime_exec_enter(
+	const struct nacc_enter_message_request *request) __noreturn;
 void nacc_linux_runtime_response(struct pt_regs *regs);
 asmlinkage void nacc_linux_runtime_enter(unsigned long runtime_entry,
 					 unsigned long control_satp) __noreturn;
