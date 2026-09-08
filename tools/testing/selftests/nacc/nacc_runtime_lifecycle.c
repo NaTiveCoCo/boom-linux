@@ -38,10 +38,12 @@ static struct nacc_runtime_lifecycle_request request_for(uint32_t opcode)
 
 	if (opcode != NACC_RUNTIME_AGENT_CREATE_OPCODE)
 		request.agent = object_ref(1);
-	if (opcode == NACC_RUNTIME_TASK_ATTACH_OPCODE) {
+	if (opcode == NACC_RUNTIME_MM_RETIRE_OPCODE ||
+	    opcode == NACC_RUNTIME_TASK_ATTACH_OPCODE)
 		request.mm = object_ref(2);
+	if (opcode == NACC_RUNTIME_TASK_ATTACH_OPCODE ||
+	    opcode == NACC_RUNTIME_TASK_RETIRE_OPCODE)
 		request.thread = object_ref(3);
-	}
 	return request;
 }
 
@@ -115,12 +117,56 @@ static void test_request_builders(void)
 			payload->thread_generation == request.thread.generation,
 			"TASK_ATTACH carries all three exact identities");
 
+	request = request_for(NACC_RUNTIME_AGENT_RETIRE_OPCODE);
+	descriptor = build_request(&request);
+	payload = (void *)(mailbox + descriptor->payload_offset);
+	report_contract(descriptor->agent_handle == request.agent.handle &&
+			!descriptor->mm_handle && !descriptor->thread_handle &&
+			payload->agent_generation == request.agent.generation &&
+			!payload->mm_generation && !payload->thread_generation,
+			"AGENT_RETIRE carries the exact Agent identity");
+
+	request = request_for(NACC_RUNTIME_MM_RETIRE_OPCODE);
+	descriptor = build_request(&request);
+	payload = (void *)(mailbox + descriptor->payload_offset);
+	report_contract(descriptor->agent_handle == request.agent.handle &&
+			descriptor->mm_handle == request.mm.handle &&
+			!descriptor->thread_handle &&
+			payload->agent_generation == request.agent.generation &&
+			payload->mm_generation == request.mm.generation &&
+			!payload->thread_generation,
+			"MM_RETIRE carries the exact Agent and mm identities");
+
+	request = request_for(NACC_RUNTIME_TASK_RETIRE_OPCODE);
+	descriptor = build_request(&request);
+	payload = (void *)(mailbox + descriptor->payload_offset);
+	report_contract(descriptor->agent_handle == request.agent.handle &&
+			!descriptor->mm_handle &&
+			descriptor->thread_handle == request.thread.handle &&
+			payload->agent_generation == request.agent.generation &&
+			!payload->mm_generation &&
+			payload->thread_generation == request.thread.generation,
+			"unattached TASK_RETIRE carries a zero mm identity");
+	request.mm = object_ref(2);
+	descriptor = build_request(&request);
+	payload = (void *)(mailbox + descriptor->payload_offset);
+	report_contract(descriptor->mm_handle == request.mm.handle &&
+			payload->mm_generation == request.mm.generation,
+			"attached TASK_RETIRE carries the exact mm identity");
+
 	memcpy(saved, mailbox, sizeof(saved));
 	request.thread.generation = 0;
 	report_contract(nacc_runtime_lifecycle_message_build(
 				mailbox, sizeof(mailbox), &request) == -EINVAL &&
 			!memcmp(saved, mailbox, sizeof(saved)),
 			"partial identity fails without changing mailbox");
+	request = request_for(NACC_RUNTIME_TASK_RETIRE_OPCODE);
+	request.mm.handle = 2;
+	memcpy(saved, mailbox, sizeof(saved));
+	report_contract(nacc_runtime_lifecycle_message_build(
+				mailbox, sizeof(mailbox), &request) == -EINVAL &&
+			!memcmp(saved, mailbox, sizeof(saved)),
+			"partial retire mm identity fails without changing mailbox");
 
 	request = request_for(NACC_RUNTIME_AGENT_CREATE_OPCODE);
 	memcpy(mailbox, &request, sizeof(request));
@@ -187,6 +233,51 @@ static void test_success_responses(void)
 			result.mm.generation == request.mm.generation &&
 			result.thread.generation == request.thread.generation,
 			"TASK_ATTACH response confirms the exact task generation");
+
+	request = request_for(NACC_RUNTIME_AGENT_RETIRE_OPCODE);
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->object_generation = request.agent.generation;
+	report_contract(!nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) &&
+			result.agent.handle == request.agent.handle &&
+			result.agent.generation == request.agent.generation &&
+			!result.mm.handle && !result.thread.handle,
+			"AGENT_RETIRE response confirms the retired Agent");
+
+	request = request_for(NACC_RUNTIME_MM_RETIRE_OPCODE);
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->mm_handle = request.mm.handle;
+	descriptor->object_generation = request.mm.generation;
+	report_contract(!nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) &&
+			result.mm.handle == request.mm.handle &&
+			result.mm.generation == request.mm.generation,
+			"MM_RETIRE response confirms the retired mm");
+
+	request = request_for(NACC_RUNTIME_TASK_RETIRE_OPCODE);
+	request.mm = object_ref(2);
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->mm_handle = request.mm.handle;
+	descriptor->thread_handle = request.thread.handle;
+	descriptor->object_generation = request.thread.generation;
+	report_contract(!nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) &&
+			result.mm.generation == request.mm.generation &&
+			result.thread.generation == request.thread.generation,
+			"TASK_RETIRE response confirms the retired task");
+	request.mm = (struct nacc_runtime_object_ref) { 0 };
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->thread_handle = request.thread.handle;
+	descriptor->object_generation = request.thread.generation;
+	report_contract(!nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) &&
+			!result.mm.handle && !result.mm.generation &&
+			result.thread.generation == request.thread.generation,
+			"unattached TASK_RETIRE response keeps mm identity zero");
 
 	request = request_for(NACC_RUNTIME_MM_CREATE_OPCODE);
 	descriptor = build_response(&request);
@@ -263,6 +354,39 @@ static void test_response_rejection(void)
 				-EPROTO,
 			"TASK_ATTACH cannot report allocation capacity");
 
+	request = request_for(NACC_RUNTIME_AGENT_RETIRE_OPCODE);
+	descriptor = build_response(&request);
+	descriptor->status = NACC_RUNTIME_LIFECYCLE_STATUS_CAPACITY;
+	report_contract(nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) ==
+				-EPROTO,
+			"retire cannot report allocation capacity");
+
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->object_generation = request.agent.generation + 1;
+	memset(&result, 0x5a, sizeof(result));
+	sentinel = result;
+	report_contract(nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) ==
+				-EPROTO &&
+			!memcmp(&result, &sentinel, sizeof(result)),
+			"retire wrong target generation is rejected");
+
+	request = request_for(NACC_RUNTIME_MM_RETIRE_OPCODE);
+	descriptor = build_response(&request);
+	descriptor->agent_handle = request.agent.handle;
+	descriptor->mm_handle = request.mm.handle + 1;
+	descriptor->object_generation = request.mm.generation;
+	memset(&result, 0x5a, sizeof(result));
+	sentinel = result;
+	report_contract(nacc_runtime_lifecycle_response_validate(
+				mailbox, sizeof(mailbox), &request, &result) ==
+				-EPROTO &&
+			!memcmp(&result, &sentinel, sizeof(result)),
+			"retire wrong echoed handle is rejected atomically");
+
+	request = request_for(NACC_RUNTIME_TASK_ATTACH_OPCODE);
 	descriptor = build_response(&request);
 	descriptor->agent_handle = request.agent.handle;
 	descriptor->mm_handle = request.mm.handle;

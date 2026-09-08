@@ -46,6 +46,13 @@ static int nacc_runtime_ref_is_valid(struct nacc_runtime_object_ref ref)
 	       ref.generation != ~(nacc_enter_u64)0;
 }
 
+static int nacc_runtime_lifecycle_opcode_allocates(nacc_enter_u32 opcode)
+{
+	return opcode == NACC_RUNTIME_AGENT_CREATE_OPCODE ||
+	       opcode == NACC_RUNTIME_MM_CREATE_OPCODE ||
+	       opcode == NACC_RUNTIME_TASK_CREATE_OPCODE;
+}
+
 int nacc_runtime_lifecycle_request_validate(
 	const struct nacc_runtime_lifecycle_request *request)
 {
@@ -56,14 +63,27 @@ int nacc_runtime_lifecycle_request_validate(
 		return !(nacc_runtime_ref_is_zero(request->agent) &&
 		       nacc_runtime_ref_is_zero(request->mm) &&
 		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
+	case NACC_RUNTIME_AGENT_RETIRE_OPCODE:
+		return !(nacc_runtime_ref_is_valid(request->agent) &&
+		       nacc_runtime_ref_is_zero(request->mm) &&
+		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
 	case NACC_RUNTIME_MM_CREATE_OPCODE:
 	case NACC_RUNTIME_TASK_CREATE_OPCODE:
 		return !(nacc_runtime_ref_is_valid(request->agent) &&
 		       nacc_runtime_ref_is_zero(request->mm) &&
 		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
+	case NACC_RUNTIME_MM_RETIRE_OPCODE:
+		return !(nacc_runtime_ref_is_valid(request->agent) &&
+		       nacc_runtime_ref_is_valid(request->mm) &&
+		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
 	case NACC_RUNTIME_TASK_ATTACH_OPCODE:
 		return !(nacc_runtime_ref_is_valid(request->agent) &&
 		       nacc_runtime_ref_is_valid(request->mm) &&
+		       nacc_runtime_ref_is_valid(request->thread)) ? -EINVAL : 0;
+	case NACC_RUNTIME_TASK_RETIRE_OPCODE:
+		return !(nacc_runtime_ref_is_valid(request->agent) &&
+		       (nacc_runtime_ref_is_zero(request->mm) ||
+			nacc_runtime_ref_is_valid(request->mm)) &&
 		       nacc_runtime_ref_is_valid(request->thread)) ? -EINVAL : 0;
 	default:
 		return -EINVAL;
@@ -167,7 +187,7 @@ int nacc_runtime_lifecycle_response_validate(
 	if (!nacc_runtime_lifecycle_header_valid(descriptor, request))
 		return -EPROTO;
 	if (descriptor->status == NACC_RUNTIME_LIFECYCLE_STATUS_CAPACITY) {
-		if (request->opcode == NACC_RUNTIME_TASK_ATTACH_OPCODE ||
+		if (!nacc_runtime_lifecycle_opcode_allocates(request->opcode) ||
 		    descriptor->agent_handle || descriptor->mm_handle ||
 		    descriptor->thread_handle || descriptor->object_generation)
 			return -EPROTO;
@@ -191,6 +211,13 @@ int nacc_runtime_lifecycle_response_validate(
 		    descriptor->mm_handle || descriptor->thread_handle)
 			return -EPROTO;
 		break;
+	case NACC_RUNTIME_AGENT_RETIRE_OPCODE:
+		candidate.agent = request->agent;
+		if (descriptor->agent_handle != request->agent.handle ||
+		    descriptor->mm_handle || descriptor->thread_handle ||
+		    descriptor->object_generation != request->agent.generation)
+			return -EPROTO;
+		break;
 	case NACC_RUNTIME_MM_CREATE_OPCODE:
 		candidate.agent = request->agent;
 		candidate.mm = (struct nacc_runtime_object_ref) {
@@ -200,6 +227,15 @@ int nacc_runtime_lifecycle_response_validate(
 		if (descriptor->agent_handle != request->agent.handle ||
 		    !nacc_runtime_ref_is_valid(candidate.mm) ||
 		    descriptor->thread_handle)
+			return -EPROTO;
+		break;
+	case NACC_RUNTIME_MM_RETIRE_OPCODE:
+		candidate.agent = request->agent;
+		candidate.mm = request->mm;
+		if (descriptor->agent_handle != request->agent.handle ||
+		    descriptor->mm_handle != request->mm.handle ||
+		    descriptor->thread_handle ||
+		    descriptor->object_generation != request->mm.generation)
 			return -EPROTO;
 		break;
 	case NACC_RUNTIME_TASK_CREATE_OPCODE:
@@ -214,6 +250,7 @@ int nacc_runtime_lifecycle_response_validate(
 			return -EPROTO;
 		break;
 	case NACC_RUNTIME_TASK_ATTACH_OPCODE:
+	case NACC_RUNTIME_TASK_RETIRE_OPCODE:
 		candidate.agent = request->agent;
 		candidate.mm = request->mm;
 		candidate.thread = request->thread;
