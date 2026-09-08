@@ -24,6 +24,7 @@
 
 #define NACC_AS_LINUX_BOOTSTRAP_READY	0x8000UL
 #define NACC_AS_LINUX_EXIT		0x8050UL
+#define NACC_AS_LINUX_RUNTIME_TRACE	0x80feUL
 #define NACC_ECALL_INSN_SIZE		4UL
 #define NACC_SV39_USER_LIMIT		(1UL << 38)
 
@@ -82,6 +83,13 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 		break;
 	case NACC_AS_LINUX_EXIT:
 		nacc_linux_runtime_exit(regs);
+		break;
+	case NACC_AS_LINUX_RUNTIME_TRACE:
+		if (regs->a0 < 1 || regs->a0 > 6 || regs->a1 || regs->a2 ||
+		    regs->a3 || regs->a4 || regs->a5 || regs->a6)
+			panic("NACC Agent ENTER trace invariant failed");
+		pr_info("NACC Agent ENTER stage %lu\n", regs->a0);
+		regs->a0 = 0;
 		break;
 	default:
 		regs->a0 = -ENOSYS;
