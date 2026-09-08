@@ -46,27 +46,27 @@ static int nacc_runtime_ref_is_valid(struct nacc_runtime_object_ref ref)
 	       ref.generation != ~(nacc_enter_u64)0;
 }
 
-static int nacc_runtime_lifecycle_request_valid(
+int nacc_runtime_lifecycle_request_validate(
 	const struct nacc_runtime_lifecycle_request *request)
 {
 	if (!request || !request->sequence)
-		return 0;
+		return -EINVAL;
 	switch (request->opcode) {
 	case NACC_RUNTIME_AGENT_CREATE_OPCODE:
-		return nacc_runtime_ref_is_zero(request->agent) &&
+		return !(nacc_runtime_ref_is_zero(request->agent) &&
 		       nacc_runtime_ref_is_zero(request->mm) &&
-		       nacc_runtime_ref_is_zero(request->thread);
+		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
 	case NACC_RUNTIME_MM_CREATE_OPCODE:
 	case NACC_RUNTIME_TASK_CREATE_OPCODE:
-		return nacc_runtime_ref_is_valid(request->agent) &&
+		return !(nacc_runtime_ref_is_valid(request->agent) &&
 		       nacc_runtime_ref_is_zero(request->mm) &&
-		       nacc_runtime_ref_is_zero(request->thread);
+		       nacc_runtime_ref_is_zero(request->thread)) ? -EINVAL : 0;
 	case NACC_RUNTIME_TASK_ATTACH_OPCODE:
-		return nacc_runtime_ref_is_valid(request->agent) &&
+		return !(nacc_runtime_ref_is_valid(request->agent) &&
 		       nacc_runtime_ref_is_valid(request->mm) &&
-		       nacc_runtime_ref_is_valid(request->thread);
+		       nacc_runtime_ref_is_valid(request->thread)) ? -EINVAL : 0;
 	default:
-		return 0;
+		return -EINVAL;
 	}
 }
 
@@ -80,7 +80,7 @@ int nacc_runtime_lifecycle_message_build(
 	if (!mailbox || mailbox_size != NACC_ENTER_MAILBOX_SIZE ||
 	    (unsigned long)mailbox &
 		(__alignof__(struct nacc_runtime_mailbox_descriptor) - 1) ||
-	    !nacc_runtime_lifecycle_request_valid(request) ||
+	    nacc_runtime_lifecycle_request_validate(request) ||
 	    nacc_runtime_ranges_overlap(mailbox, mailbox_size, request,
 				request ? sizeof(*request) : 0))
 		return -EINVAL;
@@ -156,7 +156,7 @@ int nacc_runtime_lifecycle_response_validate(
 	if (!mailbox_snapshot || snapshot_size != NACC_ENTER_MAILBOX_SIZE ||
 	    (unsigned long)mailbox_snapshot &
 		(__alignof__(struct nacc_runtime_mailbox_descriptor) - 1) ||
-	    !result || !nacc_runtime_lifecycle_request_valid(request) ||
+	    !result || nacc_runtime_lifecycle_request_validate(request) ||
 	    nacc_runtime_ranges_overlap(mailbox_snapshot, snapshot_size, result,
 				sizeof(*result)) ||
 	    nacc_runtime_ranges_overlap(mailbox_snapshot, snapshot_size, request,

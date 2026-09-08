@@ -40,6 +40,8 @@ struct nacc_runtime_lifecycle_result {
 	struct nacc_runtime_object_ref thread;
 };
 
+int nacc_runtime_lifecycle_request_validate(
+	const struct nacc_runtime_lifecycle_request *request);
 int nacc_runtime_lifecycle_message_build(
 	void *mailbox, size_t mailbox_size,
 	const struct nacc_runtime_lifecycle_request *request);
