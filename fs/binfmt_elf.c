@@ -16,6 +16,7 @@
 #include <linux/log2.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
+#include <linux/nacc_exec.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
 #include <linux/binfmts.h>
@@ -842,6 +843,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
 	struct mm_struct *mm;
 	struct pt_regs *regs;
+	struct elf_phdr nacc_executable_load = {};
+	u32 nacc_load_segment_count = 0;
+	u32 nacc_executable_load_segment_count = 0;
 
 	retval = -ENOEXEC;
 	/* First of all, some simple consistency checks */
@@ -994,6 +998,25 @@ out_free_interp:
 	retval = arch_check_elf(elf_ex,
 				!!interpreter, interp_elf_ex,
 				&arch_state);
+	if (retval)
+		goto out_free_dentry;
+
+	for (i = 0, elf_ppnt = elf_phdata; i < elf_ex->e_phnum;
+	     i++, elf_ppnt++) {
+		if (elf_ppnt->p_type != PT_LOAD)
+			continue;
+		nacc_load_segment_count++;
+		if (!(elf_ppnt->p_flags & PF_X))
+			continue;
+		nacc_executable_load_segment_count++;
+		nacc_executable_load = *elf_ppnt;
+	}
+	retval = nacc_exec_prepare_elf_current(
+		elf_ex->e_type == ET_EXEC, interpreter != NULL,
+		nacc_load_segment_count, nacc_executable_load_segment_count,
+		nacc_executable_load.p_flags, nacc_executable_load.p_offset,
+		nacc_executable_load.p_vaddr, nacc_executable_load.p_filesz,
+		nacc_executable_load.p_memsz, elf_ex->e_entry);
 	if (retval)
 		goto out_free_dentry;
 

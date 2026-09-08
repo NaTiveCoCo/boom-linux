@@ -11,6 +11,38 @@
 
 #include <asm/nacc_enter.h>
 
+#define NACC_ENTER_ELF_FLAGS 5U
+
+int nacc_enter_elf_metadata_validate(
+	const struct nacc_enter_elf_metadata *metadata,
+	nacc_enter_u64 *entry_offset, size_t *code_prefix_length)
+{
+	nacc_enter_u64 candidate_entry_offset;
+
+	if (!metadata || !entry_offset || !code_prefix_length)
+		return -EINVAL;
+	if (!metadata->fixed_executable || metadata->has_interpreter ||
+	    metadata->load_segment_count != 1 ||
+	    metadata->executable_load_segment_count != 1 ||
+	    metadata->executable_flags != NACC_ENTER_ELF_FLAGS ||
+	    metadata->executable_file_offset ||
+	    metadata->executable_virtual_address !=
+		NACC_ENTER_CODE_VIRTUAL_ADDRESS ||
+	    !metadata->executable_file_size ||
+	    metadata->executable_file_size > NACC_ENTER_MAX_CODE_PREFIX ||
+	    metadata->executable_memory_size < metadata->executable_file_size ||
+	    metadata->executable_memory_size > NACC_ENTER_PAGE_SIZE ||
+	    metadata->entry < metadata->executable_virtual_address)
+		return -ENOEXEC;
+	candidate_entry_offset = metadata->entry -
+		metadata->executable_virtual_address;
+	if (candidate_entry_offset >= metadata->executable_file_size)
+		return -ENOEXEC;
+	*entry_offset = candidate_entry_offset;
+	*code_prefix_length = metadata->executable_file_size;
+	return 0;
+}
+
 static int nacc_enter_ranges_overlap(const void *left, size_t left_size,
 				     const void *right, size_t right_size)
 {

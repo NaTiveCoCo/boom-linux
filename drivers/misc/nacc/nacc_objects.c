@@ -21,6 +21,7 @@
 #include <linux/uaccess.h>
 
 #include <asm/nacc_bootstrap.h>
+#include <asm/nacc_enter.h>
 #include <asm/nacc_live_root.h>
 #include <asm/nacc_root.h>
 
@@ -47,6 +48,9 @@ struct nacc_prepare_object {
 	struct task_struct *target;
 	struct mm_struct *mm;
 	struct nacc_live_root_handle *live_root;
+	u64 elf_entry_offset;
+	size_t elf_code_prefix_length;
+	bool elf_payload_valid;
 	struct nacc_lifecycle_exec lifecycle;
 	int post_ponr_errno;
 };
@@ -111,16 +115,19 @@ static int nacc_prepare_release(struct inode *inode, struct file *file)
 	(void)inode;
 	mutex_lock(&nacc_object_lock);
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
-		ret = nacc_lifecycle_abort_prepare(&prepare->agent->lifecycle,
-						   &prepare->lifecycle,
-						   target, generation);
-		if (ret)
-			panic("NACC prepare close abort failed (%d)", ret);
-		list_del_init(&prepare->list);
-		if (prepare->live_root)
-			panic("NACC PREPARED close found a live root");
-		nacc_finish_destroy_if_drained(prepare->agent);
-		kref_put(&prepare->reference, nacc_prepare_free);
+		/* ELF preflight 后 transaction 已由 target 接管，不能由 FD close 撤销。 */
+		if (!prepare->elf_payload_valid) {
+			ret = nacc_lifecycle_abort_prepare(
+				&prepare->agent->lifecycle, &prepare->lifecycle,
+				target, generation);
+			if (ret)
+				panic("NACC prepare close abort failed (%d)", ret);
+			list_del_init(&prepare->list);
+			if (prepare->live_root)
+				panic("NACC PREPARED close found a live root");
+			nacc_finish_destroy_if_drained(prepare->agent);
+			kref_put(&prepare->reference, nacc_prepare_free);
+		}
 	} else if (prepare->lifecycle.state !=
 			   NACC_LIFECYCLE_EXEC_COMMITTED &&
 		   prepare->lifecycle.state !=
@@ -199,6 +206,62 @@ static int nacc_prepare_reserve_minimal_live_root(
 		nacc_root_result_snapshot(), &request);
 }
 
+int nacc_exec_prepare_elf_current(bool fixed_executable,
+				  bool has_interpreter, u32 load_segment_count,
+				  u32 executable_load_segment_count,
+				  u32 executable_flags,
+				  u64 executable_file_offset,
+				  u64 executable_virtual_address,
+				  u64 executable_file_size,
+				  u64 executable_memory_size, u64 entry)
+{
+	const struct nacc_enter_elf_metadata metadata = {
+		.fixed_executable = fixed_executable,
+		.has_interpreter = has_interpreter,
+		.load_segment_count = load_segment_count,
+		.executable_load_segment_count = executable_load_segment_count,
+		.executable_flags = executable_flags,
+		.executable_file_offset = executable_file_offset,
+		.executable_virtual_address = executable_virtual_address,
+		.executable_file_size = executable_file_size,
+		.executable_memory_size = executable_memory_size,
+		.entry = entry,
+	};
+	struct nacc_prepare_object *prepare;
+	u64 entry_offset;
+	size_t code_prefix_length;
+	int ret = 0;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (!prepare)
+		goto out_unlock;
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+	if (prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_PREPARED)
+		panic("NACC ELF preflight found invalid transaction state");
+	ret = nacc_enter_elf_metadata_validate(
+		&metadata, &entry_offset, &code_prefix_length);
+	if (ret)
+		goto out_unlock;
+	if (prepare->elf_payload_valid) {
+		if (prepare->elf_entry_offset == entry_offset &&
+		    prepare->elf_code_prefix_length == code_prefix_length)
+			goto out_unlock;
+		ret = -ESTALE;
+		goto out_unlock;
+	}
+	prepare->elf_entry_offset = entry_offset;
+	prepare->elf_code_prefix_length = code_prefix_length;
+	prepare->elf_payload_valid = true;
+
+out_unlock:
+	mutex_unlock(&nacc_object_lock);
+	return ret;
+}
+
 int nacc_exec_commit_current(void)
 {
 	struct nacc_prepare_object *prepare;
@@ -207,6 +270,10 @@ int nacc_exec_commit_current(void)
 	mutex_lock(&nacc_object_lock);
 	prepare = nacc_find_prepare_locked(current);
 	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
+		if (!prepare->elf_payload_valid) {
+			ret = -ENOEXEC;
+			goto out_unlock;
+		}
 		if (prepare->mm || prepare->live_root)
 			panic("NACC first exec commit found existing runtime state");
 		ret = nacc_prepare_reserve_minimal_live_root(prepare);

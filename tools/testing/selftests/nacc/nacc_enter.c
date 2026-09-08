@@ -48,10 +48,50 @@ int main(void)
 	struct nacc_runtime_mailbox_descriptor *descriptor = (void *)mailbox;
 	struct nacc_runtime_enter_payload *payload;
 	struct nacc_enter_message_request request;
+	struct nacc_enter_elf_metadata elf = {
+		.fixed_executable = true,
+		.load_segment_count = 1,
+		.executable_load_segment_count = 1,
+		.executable_flags = 5,
+		.executable_virtual_address = NACC_ENTER_CODE_VIRTUAL_ADDRESS,
+		.executable_file_size = 0xf8,
+		.executable_memory_size = 0xf8,
+		.entry = NACC_ENTER_CODE_VIRTUAL_ADDRESS + 0xe8,
+	};
 	uint8_t sentinel[NACC_ENTER_MAILBOX_SIZE];
+	nacc_enter_u64 elf_entry_offset = 0;
+	size_t elf_prefix_length = 0;
 	int ret;
 
-	printf("TAP version 13\n1..16\n");
+	printf("TAP version 13\n1..21\n");
+	ret = nacc_enter_elf_metadata_validate(&elf, &elf_entry_offset,
+					       &elf_prefix_length);
+	report_contract(!ret && elf_entry_offset == 0xe8 &&
+			elf_prefix_length == 0xf8,
+			"minimal OCI exit ELF metadata is accepted");
+	elf.fixed_executable = false;
+	report_contract(nacc_enter_elf_metadata_validate(
+				&elf, &elf_entry_offset, &elf_prefix_length) ==
+				-ENOEXEC,
+			"PIE ELF is rejected");
+	elf.fixed_executable = true;
+	elf.has_interpreter = true;
+	report_contract(nacc_enter_elf_metadata_validate(
+				&elf, &elf_entry_offset, &elf_prefix_length) ==
+				-ENOEXEC,
+			"ELF interpreter is rejected");
+	elf.has_interpreter = false;
+	elf.load_segment_count = 2;
+	report_contract(nacc_enter_elf_metadata_validate(
+				&elf, &elf_entry_offset, &elf_prefix_length) ==
+				-ENOEXEC,
+			"multiple load segments are rejected");
+	elf.load_segment_count = 1;
+	elf.entry = NACC_ENTER_CODE_VIRTUAL_ADDRESS + elf.executable_file_size;
+	report_contract(nacc_enter_elf_metadata_validate(
+				&elf, &elf_entry_offset, &elf_prefix_length) ==
+				-ENOEXEC,
+			"entry outside file-backed code is rejected");
 	memset(code, 0xa5, sizeof(code));
 	memset(mailbox, 0x5a, sizeof(mailbox));
 	request = valid_request(code, 16);

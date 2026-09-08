@@ -11,6 +11,7 @@
 #include <linux/types.h>
 #else
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 #endif
 
@@ -103,8 +104,24 @@ struct nacc_enter_message_request {
 	size_t code_prefix_length;
 };
 
+struct nacc_enter_elf_metadata {
+	bool fixed_executable;
+	bool has_interpreter;
+	nacc_enter_u32 load_segment_count;
+	nacc_enter_u32 executable_load_segment_count;
+	nacc_enter_u32 executable_flags;
+	nacc_enter_u64 executable_file_offset;
+	nacc_enter_u64 executable_virtual_address;
+	nacc_enter_u64 executable_file_size;
+	nacc_enter_u64 executable_memory_size;
+	nacc_enter_u64 entry;
+};
+
 int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 			     const struct nacc_enter_message_request *request);
+int nacc_enter_elf_metadata_validate(
+	const struct nacc_enter_elf_metadata *metadata,
+	nacc_enter_u64 *entry_offset, size_t *code_prefix_length);
 
 _Static_assert(sizeof(struct nacc_runtime_abi_header) == 56,
 		       "NACC runtime ABI header layout changed");
