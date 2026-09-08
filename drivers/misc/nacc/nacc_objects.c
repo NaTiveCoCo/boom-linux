@@ -433,7 +433,7 @@ void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt)
 		kref_put(&prepare->reference, nacc_prepare_free);
 }
 
-static int nacc_prepare_reserve_minimal_live_root(
+static int nacc_prepare_build_minimal_live_root(
 	struct nacc_prepare_object *prepare)
 {
 	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1 };
@@ -442,14 +442,42 @@ static int nacc_prepare_reserve_minimal_live_root(
 		.payload_page_counts = payload_page_counts,
 		.payload_mapping_count = NACC_MINIMAL_PAYLOAD_MAPPINGS,
 	};
+	const struct nacc_live_root_mapping_request mappings[] = {
+		{
+			.virtual_base = NACC_ENTER_CODE_VIRTUAL_ADDRESS,
+			.page_count = 1,
+			.permissions = NACC_ROOT_PTE_READ |
+				       NACC_ROOT_PTE_EXECUTE |
+				       NACC_ROOT_PTE_USER,
+		},
+		{
+			.virtual_base = NACC_ENTER_STACK_VIRTUAL_ADDRESS,
+			.page_count = 1,
+			.permissions = NACC_ROOT_PTE_READ |
+				       NACC_ROOT_PTE_WRITE |
+				       NACC_ROOT_PTE_USER,
+		},
+	};
+	int ret;
 
 	if (prepare->live_root)
-		panic("NACC minimal live root was already reserved");
+		panic("NACC minimal live root was already built");
 	if (!nacc_bootstrap_physical_layout_available() || !nacc_root_is_ready())
 		return -ENODEV;
-	return nacc_live_root_reserve(
+	ret = nacc_live_root_reserve(
 		&prepare->live_root, nacc_bootstrap_physical_layout_snapshot(),
 		nacc_root_result_snapshot(), &request);
+	if (ret)
+		return ret;
+	ret = nacc_live_root_build(prepare->live_root,
+				   nacc_root_descriptor_snapshot(),
+				   nacc_agent_image_metadata_snapshot(), mappings,
+				   ARRAY_SIZE(mappings));
+	if (ret) {
+		nacc_live_root_release_unpublished(prepare->live_root);
+		prepare->live_root = NULL;
+	}
+	return ret;
 }
 
 int nacc_exec_prepare_elf(const struct nacc_exec_attempt *attempt,
@@ -596,7 +624,7 @@ int nacc_exec_commit(const struct nacc_exec_attempt *attempt)
 		}
 		if (prepare->mm || prepare->live_root)
 			panic("NACC first exec commit found existing runtime state");
-		ret = nacc_prepare_reserve_minimal_live_root(prepare);
+		ret = nacc_prepare_build_minimal_live_root(prepare);
 		if (ret)
 			goto out_unlock;
 		if (prepare->runtime_preparing || prepare->runtime_attaching ||
