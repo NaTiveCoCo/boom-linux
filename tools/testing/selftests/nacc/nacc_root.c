@@ -189,7 +189,7 @@ int main(void)
 	uint64_t pte;
 	size_t index;
 	int ret;
-	int plan = 37;
+	int plan = 38;
 
 	ksft_print_header();
 	ksft_set_plan(plan);
@@ -295,14 +295,14 @@ int main(void)
 			control_result.next_pool_physical_address,
 			"live layout planner consumes the control cursor");
 	mappings[0] = (struct nacc_root_user_mapping) {
-		.virtual_base = UINT64_C(0x00400000),
+		.virtual_base = UINT64_C(0x00010000),
 		.physical_base = live_layout.payload_bases[0],
 		.page_count = 1,
 		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_EXECUTE |
 			NACC_ROOT_PTE_USER,
 	};
 	mappings[1] = (struct nacc_root_user_mapping) {
-		.virtual_base = UINT64_C(0x00800000),
+		.virtual_base = UINT64_C(0x00020000),
 		.physical_base = live_layout.payload_bases[1],
 		.page_count = 1,
 		.permissions = NACC_ROOT_PTE_READ | NACC_ROOT_PTE_WRITE |
@@ -321,6 +321,9 @@ int main(void)
 	report_contract(!ret && result.root_physical_address ==
 			live_config.root_physical_address,
 			"live builder publishes its independent ROOT_L0");
+	report_contract(!ret && result.lower_ptp_count + 1 <=
+			live_layout_request.ptp_page_count,
+			"minimal payload stays within the 12-page PTP budget");
 	ret = walk_leaf(&store, result.root_physical_address,
 			mappings[0].virtual_base, &pte);
 	report_contract(!ret && pte_physical_address(pte) ==

@@ -20,7 +20,15 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
+#include <asm/nacc_bootstrap.h>
+#include <asm/nacc_live_root.h>
+#include <asm/nacc_root.h>
+
 #include "nacc_internal.h"
+
+/* 当前固定 code/stack payload 与 management mappings 的已测试上界。 */
+#define NACC_MINIMAL_LIVE_PTP_PAGES 12ULL
+#define NACC_MINIMAL_PAYLOAD_MAPPINGS 2U
 
 struct nacc_agent_object {
 	struct kref reference;
@@ -38,6 +46,7 @@ struct nacc_prepare_object {
 	struct nacc_agent_object *agent;
 	struct task_struct *target;
 	struct mm_struct *mm;
+	struct nacc_live_root_handle *live_root;
 	struct nacc_lifecycle_exec lifecycle;
 	int post_ponr_errno;
 };
@@ -84,7 +93,8 @@ static void nacc_prepare_free(struct kref *reference)
 		container_of(reference, struct nacc_prepare_object, reference);
 
 	if (!list_empty(&prepare->list) ||
-	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY || prepare->mm)
+	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY || prepare->mm ||
+	    prepare->live_root)
 		panic("NACC freeing live prepare object");
 	put_task_struct(prepare->target);
 	kref_put(&prepare->agent->reference, nacc_agent_free);
@@ -107,6 +117,8 @@ static int nacc_prepare_release(struct inode *inode, struct file *file)
 		if (ret)
 			panic("NACC prepare close abort failed (%d)", ret);
 		list_del_init(&prepare->list);
+		if (prepare->live_root)
+			panic("NACC PREPARED close found a live root");
 		nacc_finish_destroy_if_drained(prepare->agent);
 		kref_put(&prepare->reference, nacc_prepare_free);
 	} else if (prepare->lifecycle.state !=
@@ -168,6 +180,25 @@ static struct nacc_prepare_object *nacc_find_prepare_locked(
 	return NULL;
 }
 
+static int nacc_prepare_reserve_minimal_live_root(
+	struct nacc_prepare_object *prepare)
+{
+	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1 };
+	const struct nacc_live_root_layout_request request = {
+		.ptp_page_count = NACC_MINIMAL_LIVE_PTP_PAGES,
+		.payload_page_counts = payload_page_counts,
+		.payload_mapping_count = NACC_MINIMAL_PAYLOAD_MAPPINGS,
+	};
+
+	if (prepare->live_root)
+		panic("NACC minimal live root was already reserved");
+	if (!nacc_bootstrap_physical_layout_available() || !nacc_root_is_ready())
+		return -ENODEV;
+	return nacc_live_root_reserve(
+		&prepare->live_root, nacc_bootstrap_physical_layout_snapshot(),
+		nacc_root_result_snapshot(), &request);
+}
+
 int nacc_exec_commit_current(void)
 {
 	struct nacc_prepare_object *prepare;
@@ -176,25 +207,32 @@ int nacc_exec_commit_current(void)
 	mutex_lock(&nacc_object_lock);
 	prepare = nacc_find_prepare_locked(current);
 	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
-		if (prepare->mm)
-			panic("NACC first exec commit found an mm binding");
+		if (prepare->mm || prepare->live_root)
+			panic("NACC first exec commit found existing runtime state");
+		ret = nacc_prepare_reserve_minimal_live_root(prepare);
+		if (ret)
+			goto out_unlock;
 		ret = nacc_lifecycle_commit_exec(
 			&prepare->agent->lifecycle, &prepare->lifecycle,
 			nacc_target_identity(current),
 			prepare->lifecycle.prepare_generation);
+		if (ret) {
+			nacc_live_root_release_unpublished(prepare->live_root);
+			prepare->live_root = NULL;
+		}
 	} else if (prepare &&
 		 prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
 		if (prepare->mm != current->mm)
 			panic("NACC re-exec commit found an invalid mm binding");
-		ret = nacc_lifecycle_commit_reexec(
-			&prepare->agent->lifecycle, &prepare->lifecycle,
-			nacc_target_identity(current),
-			&prepare->lifecycle.prepare_generation);
-		if (!ret)
-			prepare->post_ponr_errno = 0;
+		if (!prepare->live_root)
+			panic("NACC re-exec commit found no live root");
+		/* 最小 single-mm 路径不允许把旧 live root 静默绑定到新 mm。 */
+		ret = -EOPNOTSUPP;
 	} else if (prepare) {
 		panic("NACC exec commit found invalid transaction state");
 	}
+
+out_unlock:
 	mutex_unlock(&nacc_object_lock);
 	return ret;
 }
@@ -221,6 +259,8 @@ bool nacc_exec_abort_current(void)
 	if (ret)
 		panic("NACC exec pre-PONR abort failed (%d)", ret);
 	list_del_init(&prepare->list);
+	if (prepare->live_root)
+		panic("NACC pre-PONR abort found a live root");
 	nacc_finish_destroy_if_drained(prepare->agent);
 	mutex_unlock(&nacc_object_lock);
 	kref_put(&prepare->reference, nacc_prepare_free);
@@ -373,6 +413,10 @@ void nacc_exec_exit_current(void)
 	mm = prepare->mm;
 	prepare->mm = NULL;
 	list_del_init(&prepare->list);
+	if (prepare->live_root) {
+		nacc_live_root_release_unpublished(prepare->live_root);
+		prepare->live_root = NULL;
+	}
 	nacc_finish_destroy_if_drained(prepare->agent);
 	mutex_unlock(&nacc_object_lock);
 	if (mm)
