@@ -85,7 +85,7 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 		nacc_linux_runtime_exit(regs);
 		break;
 	case NACC_AS_LINUX_RUNTIME_TRACE:
-		if (regs->a0 < 1 || regs->a0 > 6 || regs->a1 || regs->a2 ||
+		if (regs->a0 > 6 || regs->a1 || regs->a2 ||
 		    regs->a3 || regs->a4 || regs->a5 || regs->a6)
 			panic("NACC Agent ENTER trace invariant failed");
 		pr_info("NACC Agent ENTER stage %lu\n", regs->a0);
