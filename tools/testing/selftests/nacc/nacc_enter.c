@@ -33,8 +33,6 @@ static struct nacc_enter_message_request valid_request(const uint8_t *code,
 		.agent_handle = 2,
 		.mm_handle = 3,
 		.thread_handle = 4,
-		.service_handle = 5,
-		.object_generation = 6,
 		.code_prefix = code,
 		.code_prefix_length = code_length,
 	};
@@ -64,7 +62,7 @@ int main(void)
 	size_t elf_prefix_length = 0;
 	int ret;
 
-	printf("TAP version 13\n1..22\n");
+	printf("TAP version 13\n1..23\n");
 	ret = nacc_enter_elf_metadata_validate(&elf, &elf_entry_offset,
 					       &elf_prefix_length);
 	report_contract(!ret && elf_entry_offset == 0xe8 &&
@@ -112,6 +110,14 @@ int main(void)
 			descriptor->flags == NACC_RUNTIME_MAILBOX_FLAG_REQUEST &&
 			descriptor->status == 0,
 			"builder emits a strict ENTER request");
+	report_contract(descriptor->header.abi_minor == NACC_RUNTIME_ABI_MINOR &&
+			descriptor->header.features ==
+				(NACC_RUNTIME_FEATURE_BASE |
+				 NACC_RUNTIME_FEATURE_SERVICE_GENERATION |
+				 NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION) &&
+			!descriptor->service_handle &&
+			!descriptor->object_generation,
+			"builder requests AS-owned service allocation");
 	report_contract(descriptor->payload_offset == sizeof(*descriptor) &&
 			descriptor->payload_length == sizeof(*payload) +
 				request.code_prefix_length,

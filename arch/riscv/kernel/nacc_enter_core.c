@@ -80,7 +80,6 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 		return -EINVAL;
 	if (!request->sequence || !request->agent_handle ||
 	    !request->mm_handle || !request->thread_handle ||
-	    !request->service_handle || !request->object_generation ||
 	    !request->ptp_page_count || !request->code_prefix_length ||
 	    request->code_prefix_length > NACC_ENTER_MAX_CODE_PREFIX ||
 	    request->entry_offset >= request->code_prefix_length ||
@@ -126,15 +125,14 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 	descriptor->header.abi_minor = NACC_RUNTIME_ABI_MINOR;
 	descriptor->header.struct_size = sizeof(*descriptor);
 	descriptor->header.features = NACC_RUNTIME_FEATURE_BASE |
-		NACC_RUNTIME_FEATURE_SERVICE_GENERATION;
+		NACC_RUNTIME_FEATURE_SERVICE_GENERATION |
+		NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION;
 	descriptor->opcode = NACC_RUNTIME_ENTER_OPCODE;
 	descriptor->flags = NACC_RUNTIME_MAILBOX_FLAG_REQUEST;
 	descriptor->sequence = request->sequence;
 	descriptor->agent_handle = request->agent_handle;
 	descriptor->mm_handle = request->mm_handle;
 	descriptor->thread_handle = request->thread_handle;
-	descriptor->service_handle = request->service_handle;
-	descriptor->object_generation = request->object_generation;
 	descriptor->payload_offset = sizeof(*descriptor);
 	descriptor->payload_length = sizeof(*payload) +
 		request->code_prefix_length;

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Linux -> AS runtime 最小 ENTER mailbox ABI 与纯消息构造器。
- * wire format 必须与 Agent runtime 的 nacc_abi.h v1.1 保持一致。
+ * wire format 必须与 Agent runtime 的 nacc_abi.h v1.2 保持一致。
  */
 #ifndef _ASM_RISCV_NACC_ENTER_H
 #define _ASM_RISCV_NACC_ENTER_H
@@ -24,9 +24,10 @@
 
 #define NACC_RUNTIME_MAILBOX_MAGIC 0x4e4143434d424f58ULL
 #define NACC_RUNTIME_ABI_MAJOR 1U
-#define NACC_RUNTIME_ABI_MINOR 1U
+#define NACC_RUNTIME_ABI_MINOR 2U
 #define NACC_RUNTIME_FEATURE_BASE (1ULL << 0)
 #define NACC_RUNTIME_FEATURE_SERVICE_GENERATION (1ULL << 1)
+#define NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION (1ULL << 5)
 #define NACC_RUNTIME_ENTER_OPCODE 0x0040U
 #define NACC_RUNTIME_MAILBOX_FLAG_REQUEST (1U << 0)
 #define NACC_RUNTIME_RESERVED_WORDS 4U
@@ -63,6 +64,7 @@ struct nacc_runtime_mailbox_descriptor {
 	nacc_enter_u64 agent_handle;
 	nacc_enter_u64 mm_handle;
 	nacc_enter_u64 thread_handle;
+	/* v1.2 allocation request 必须保持 zero pair；由 AS 返回真实 identity。 */
 	nacc_enter_u64 service_handle;
 	nacc_enter_u64 object_generation;
 	nacc_enter_u64 payload_offset;
@@ -98,8 +100,6 @@ struct nacc_enter_message_request {
 	nacc_enter_u64 agent_handle;
 	nacc_enter_u64 mm_handle;
 	nacc_enter_u64 thread_handle;
-	nacc_enter_u64 service_handle;
-	nacc_enter_u64 object_generation;
 	const nacc_enter_u8 *code_prefix;
 	size_t code_prefix_length;
 };
@@ -118,6 +118,7 @@ struct nacc_enter_elf_metadata {
 	nacc_enter_u64 entry;
 };
 
+/* caller 必须先确认 backend 已协商 SERVICE_ALLOCATION capability。 */
 int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 			     const struct nacc_enter_message_request *request);
 int nacc_enter_elf_metadata_validate(
