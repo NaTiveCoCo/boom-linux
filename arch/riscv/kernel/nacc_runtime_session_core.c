@@ -131,7 +131,7 @@ int nacc_linux_runtime_session_arm(
 int nacc_linux_runtime_session_response_capture(
 	struct nacc_linux_runtime_session *session,
 	const void *shared_mailbox, size_t shared_mailbox_size,
-	nacc_enter_u64 sequence, nacc_enter_u32 request_opcode,
+	nacc_enter_u64 sequence, nacc_enter_u64 request_opcode,
 	const nacc_enter_u64 reserved_registers[5])
 {
 	nacc_enter_u64 reserved_snapshot[5];
@@ -166,6 +166,7 @@ int nacc_linux_runtime_session_response_capture(
 	if (!nacc_runtime_session_words_are_zero(reserved_snapshot, 5) ||
 	    !sequence || sequence != session->next_sequence ||
 	    sequence != session->pending_request.sequence ||
+	    request_opcode > ~(nacc_enter_u32)0 ||
 	    request_opcode != session->pending_request.opcode) {
 		__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_FAILED,
 				 __ATOMIC_RELEASE);

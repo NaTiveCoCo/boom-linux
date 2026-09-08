@@ -158,6 +158,8 @@ static void test_protocol_failures(void)
 	_Alignas(NACC_ENTER_MAILBOX_SIZE)
 		struct nacc_linux_runtime_session reserved_session = {};
 	_Alignas(NACC_ENTER_MAILBOX_SIZE)
+		struct nacc_linux_runtime_session opcode_session = {};
+	_Alignas(NACC_ENTER_MAILBOX_SIZE)
 		struct nacc_linux_runtime_session overflow_session = {};
 	_Alignas(NACC_ENTER_MAILBOX_SIZE)
 		struct nacc_linux_runtime_session future_arm_session = {};
@@ -215,8 +217,20 @@ static void test_protocol_failures(void)
 			reserved_session.state == NACC_RUNTIME_SESSION_FAILED,
 			"nonzero reserved register makes the session fail closed");
 
-	request = agent_create(UINT64_MAX);
 	reserved[0] = 0;
+	build_success_response(&request);
+	report_contract(!nacc_linux_runtime_session_initialize(
+			&opcode_session, 31) &&
+			!nacc_linux_runtime_session_arm(&opcode_session, &request) &&
+			nacc_linux_runtime_session_response_capture(
+				&opcode_session, shared_mailbox,
+				sizeof(shared_mailbox), 31,
+				(1ULL << 32) | request.opcode, reserved) ==
+				-EPROTO &&
+			opcode_session.state == NACC_RUNTIME_SESSION_FAILED,
+			"high opcode bits make the session fail closed");
+
+	request = agent_create(UINT64_MAX);
 	build_success_response(&request);
 	memset(&result, 0x5a, sizeof(result));
 	sentinel = result;

@@ -5,6 +5,21 @@
 
 #include <linux/linkage.h>
 
+#include <asm/nacc_runtime_lifecycle.h>
+
+#define NACC_AS_LINUX_RUNTIME_RESPONSE_OPCODE 0x8002U
+
+struct pt_regs;
+
+int nacc_linux_runtime_lifecycle_call(
+	const struct nacc_runtime_lifecycle_request *request,
+	struct nacc_runtime_lifecycle_result *result);
+void nacc_linux_runtime_response(struct pt_regs *regs);
+asmlinkage void nacc_linux_runtime_enter(unsigned long runtime_entry,
+					 unsigned long control_satp) __noreturn;
+asmlinkage void nacc_linux_runtime_response_resume(void);
+asmlinkage void nacc_linux_runtime_response_complete(void) __noreturn;
+
 asmlinkage void nacc_linux_runtime_exit_resume(void);
 asmlinkage void nacc_linux_runtime_exit_complete(void) __noreturn;
 

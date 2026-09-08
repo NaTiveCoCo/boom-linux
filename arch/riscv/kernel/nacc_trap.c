@@ -77,6 +77,9 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 	case NACC_AS_LINUX_BOOTSTRAP_READY:
 		regs->a0 = nacc_linux_bootstrap_ready(regs);
 		break;
+	case NACC_AS_LINUX_RUNTIME_RESPONSE_OPCODE:
+		nacc_linux_runtime_response(regs);
+		break;
 	case NACC_AS_LINUX_EXIT:
 		nacc_linux_runtime_exit(regs);
 		break;

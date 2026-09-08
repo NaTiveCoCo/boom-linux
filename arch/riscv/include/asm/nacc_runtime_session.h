@@ -5,7 +5,6 @@
 
 #include <asm/nacc_runtime_lifecycle.h>
 
-#define NACC_AS_LINUX_RUNTIME_RESPONSE_OPCODE 0x8002U
 #define NACC_RUNTIME_SESSION_METADATA_SIZE 80U
 
 enum nacc_linux_runtime_session_state {
@@ -49,7 +48,7 @@ int nacc_linux_runtime_session_arm(
 int nacc_linux_runtime_session_response_capture(
 	struct nacc_linux_runtime_session *session,
 	const void *shared_mailbox, size_t shared_mailbox_size,
-	nacc_enter_u64 sequence, nacc_enter_u32 request_opcode,
+	nacc_enter_u64 sequence, nacc_enter_u64 request_opcode,
 	const nacc_enter_u64 reserved_registers[5]);
 int nacc_linux_runtime_session_complete(
 	struct nacc_linux_runtime_session *session,
