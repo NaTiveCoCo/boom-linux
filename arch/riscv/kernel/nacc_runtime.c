@@ -198,7 +198,9 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	    num_online_cpus() != 1 || raw_smp_processor_id() != 0)
 		panic("NACC exec ENTER caller invariant failed");
 	active_request = *request;
+	pr_info("NACC Linux runtime ENTER begin\n");
 	mutex_lock(&nacc_linux_runtime_mutex);
+	pr_info("NACC Linux runtime ENTER locked\n");
 	nacc_linux_runtime_session_require_idle();
 	if (READ_ONCE(nacc_linux_runtime_task) ||
 	    READ_ONCE(nacc_linux_runtime_call) ||
@@ -224,9 +226,11 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	memcpy_toio(mailbox_alias, request_page, PAGE_SIZE);
 	/* Agent acquire 只能在 owner 与完整 ENTER page 都已发布后运行。 */
 	mb();
+	pr_info("NACC Linux runtime ENTER published\n");
 	iounmap(mailbox_alias);
 	free_page((unsigned long)request_page);
 
+	pr_info("NACC Linux runtime ENTER switch\n");
 	local_irq_disable();
 	if ((csr_read(CSR_SATP) & NACC_LINUX_SESSION_SATP_MODE_MASK) !=
 		    NACC_LINUX_SESSION_SATP_MODE_SV39 ||

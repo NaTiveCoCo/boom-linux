@@ -813,6 +813,7 @@ void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 		mutex_unlock(&nacc_object_lock);
 		return;
 	}
+	pr_info("NACC Linux exec activation begin\n");
 	if (prepare->mm != current->mm)
 		panic("NACC exec activation found an invalid mm binding");
 	if (!prepare->runtime_attached || prepare->runtime_preparing ||
@@ -834,6 +835,7 @@ void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 	if (ret)
 		panic("NACC exec activation failed (%d)", ret);
 	mutex_unlock(&nacc_object_lock);
+	pr_info("NACC Linux exec activation complete\n");
 }
 
 void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
@@ -851,6 +853,7 @@ void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
 		mutex_unlock(&nacc_object_lock);
 		return;
 	}
+	pr_info("NACC Linux exec ENTER begin\n");
 	if (prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_ACTIVE ||
 	    prepare->mm != current->mm || !prepare->runtime_attached ||
 	    prepare->runtime_preparing || prepare->runtime_attaching ||
@@ -882,6 +885,7 @@ void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
 		.code_prefix_length = prepare->elf_code_prefix_length,
 	};
 	mutex_unlock(&nacc_object_lock);
+	pr_info("NACC Linux exec ENTER request ready\n");
 	nacc_linux_runtime_exec_enter(&request);
 }
 
