@@ -20,6 +20,7 @@
 #include <asm/nacc_runtime.h>
 #include <asm/nacc_runtime_session.h>
 #include <asm/pgtable.h>
+#include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/tlbflush.h>
 
@@ -191,7 +192,10 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	void __iomem *mailbox_alias;
 	void *request_page;
 	u64 control_satp;
+	unsigned long handoff_sp;
+	unsigned long stack_bottom;
 	unsigned long stack_top;
+	unsigned long trap_frame_size;
 	int ret;
 
 	if (!request || request->sequence || current->flags & PF_KTHREAD ||
@@ -238,8 +242,16 @@ void __noreturn nacc_linux_runtime_exec_enter(
 		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
 	    (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA))
 		panic("NACC exec ENTER handoff state invariant failed");
+	stack_bottom = (unsigned long)task_stack_page(current);
 	stack_top = nacc_linux_runtime_stack_top(current);
-	current->thread_info.kernel_sp = stack_top;
+	handoff_sp = current_stack_pointer;
+	trap_frame_size = ALIGN(sizeof(struct pt_regs), STACK_ALIGN);
+	if (handoff_sp < stack_bottom || handoff_sp >= stack_top ||
+	    handoff_sp & (STACK_ALIGN - 1) ||
+	    handoff_sp - stack_bottom < trap_frame_size)
+		panic("NACC exec ENTER live stack invariant failed");
+	/* 首个 AS trap frame 必须落在已放弃的 exec continuation 下方。 */
+	current->thread_info.kernel_sp = handoff_sp;
 	nacc_linux_runtime_enter(nacc_linux_runtime_entry_snapshot(),
 				 control_satp);
 }
