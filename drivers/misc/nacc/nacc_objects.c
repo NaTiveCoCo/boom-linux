@@ -289,6 +289,23 @@ void nacc_exec_activate_current(void)
 	mutex_unlock(&nacc_object_lock);
 }
 
+bool nacc_exec_is_active_current(void)
+{
+	struct nacc_prepare_object *prepare;
+	bool active = false;
+
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (prepare &&
+	    prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
+		if (prepare->mm != current->mm)
+			panic("NACC active query found an invalid mm binding");
+		active = true;
+	}
+	mutex_unlock(&nacc_object_lock);
+	return active;
+}
+
 void nacc_exec_record_failure_current(int failure_errno)
 {
 	struct nacc_prepare_object *prepare;

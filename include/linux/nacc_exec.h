@@ -10,6 +10,7 @@ int nacc_exec_commit_current(void);
 bool nacc_exec_abort_current(void);
 void nacc_exec_bind_mm_current(void);
 void nacc_exec_activate_current(void);
+bool nacc_exec_is_active_current(void);
 void nacc_exec_record_failure_current(int failure_errno);
 void nacc_exec_exit_current(void);
 #else
@@ -29,6 +30,11 @@ static inline void nacc_exec_bind_mm_current(void)
 
 static inline void nacc_exec_activate_current(void)
 {
+}
+
+static inline bool nacc_exec_is_active_current(void)
+{
+	return false;
 }
 
 static inline void nacc_exec_record_failure_current(int failure_errno)
