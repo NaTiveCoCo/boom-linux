@@ -36,4 +36,33 @@ int nacc_live_root_layout_plan(struct nacc_live_root_layout_result *result,
 			       const struct nacc_root_build_result *control_root,
 			       const struct nacc_live_root_layout_request *request);
 
+#ifdef __KERNEL__
+struct nacc_live_root_mapping_request {
+	nacc_bootstrap_u64 virtual_base;
+	nacc_bootstrap_u64 page_count;
+	nacc_bootstrap_u64 permissions;
+};
+
+struct nacc_live_root_handle;
+
+/* reserve 成功后 handle 由调用方唯一持有，且尚未发布或激活。 */
+int nacc_live_root_reserve(struct nacc_live_root_handle **handle,
+			   const struct nacc_bootstrap_physical_layout *layout,
+			   const struct nacc_root_build_result *control_root,
+			   const struct nacc_live_root_layout_request *request);
+/* build 失败会清零完整 reservation，但仍须由调用方 release handle。 */
+int nacc_live_root_build(struct nacc_live_root_handle *handle,
+			 const struct nacc_bootstrap_descriptor *descriptor,
+			 const struct nacc_agent_image_metadata *image,
+			 const struct nacc_live_root_mapping_request *mappings,
+			 size_t mapping_count);
+const struct nacc_live_root_layout_result *
+nacc_live_root_layout_snapshot(const struct nacc_live_root_handle *handle);
+const struct nacc_root_build_result *
+nacc_live_root_result_snapshot(const struct nacc_live_root_handle *handle);
+/* caller 安装 root 并完成规定的 SFENCE.VMA 后，必须立即封闭清理入口。 */
+void nacc_live_root_mark_published(struct nacc_live_root_handle *handle);
+void nacc_live_root_release_unpublished(struct nacc_live_root_handle *handle);
+#endif
+
 #endif /* _ASM_RISCV_NACC_LIVE_ROOT_H */
