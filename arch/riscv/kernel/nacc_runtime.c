@@ -40,7 +40,15 @@ static struct nacc_linux_runtime_session nacc_linux_runtime_session
 	__aligned(NACC_ENTER_MAILBOX_SIZE);
 static struct task_struct *nacc_linux_runtime_task;
 static struct nacc_linux_runtime_call *nacc_linux_runtime_call;
-static struct task_struct *nacc_linux_runtime_enter_task;
+
+struct nacc_linux_runtime_enter_owner {
+	struct task_struct *task;
+	u64 sequence;
+	u64 linux_satp;
+	u64 live_satp;
+};
+
+static struct nacc_linux_runtime_enter_owner nacc_linux_runtime_enter_owner;
 
 static unsigned long nacc_linux_runtime_stack_top(struct task_struct *task)
 {
@@ -208,7 +216,7 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	nacc_linux_runtime_session_require_idle();
 	if (READ_ONCE(nacc_linux_runtime_task) ||
 	    READ_ONCE(nacc_linux_runtime_call) ||
-	    READ_ONCE(nacc_linux_runtime_enter_task))
+	    READ_ONCE(nacc_linux_runtime_enter_owner.task))
 		panic("NACC exec ENTER found stale runtime ownership");
 	active_request.sequence = nacc_linux_runtime_session.next_sequence;
 	descriptor = nacc_root_descriptor_snapshot();
@@ -226,9 +234,8 @@ void __noreturn nacc_linux_runtime_exec_enter(
 				     _PAGE_KERNEL);
 	if (!mailbox_alias)
 		panic("NACC exec ENTER mailbox mapping failed");
-	WRITE_ONCE(nacc_linux_runtime_enter_task, current);
 	memcpy_toio(mailbox_alias, request_page, PAGE_SIZE);
-	/* Agent acquire 只能在 owner 与完整 ENTER page 都已发布后运行。 */
+	/* Agent acquire 只能在完整 ENTER page 发布后运行。 */
 	mb();
 	pr_info("NACC Linux runtime ENTER published\n");
 	iounmap(mailbox_alias);
@@ -242,6 +249,15 @@ void __noreturn nacc_linux_runtime_exec_enter(
 		    (control_satp & NACC_LINUX_SESSION_SATP_PPN_MASK) ||
 	    (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA))
 		panic("NACC exec ENTER handoff state invariant failed");
+	nacc_linux_runtime_enter_owner = (struct nacc_linux_runtime_enter_owner) {
+		.task = current,
+		.sequence = active_request.sequence,
+		.linux_satp = csr_read(CSR_SATP),
+		.live_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
+			(active_request.live_root_physical_address >> PAGE_SHIFT),
+	};
+	/* IRQ-disabled owner snapshot 必须先于 Agent ENTER 可见。 */
+	mb();
 	stack_bottom = (unsigned long)task_stack_page(current);
 	stack_top = nacc_linux_runtime_stack_top(current);
 	handoff_sp = current_stack_pointer;
@@ -254,6 +270,29 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	current->thread_info.kernel_sp = handoff_sp;
 	nacc_linux_runtime_enter(nacc_linux_runtime_entry_snapshot(),
 				 control_satp);
+}
+
+void nacc_linux_runtime_exec_exit_complete(void)
+{
+	struct nacc_linux_runtime_enter_owner owner =
+		nacc_linux_runtime_enter_owner;
+	int ret;
+
+	if (!irqs_disabled() || !owner.task || owner.task != current ||
+	    !owner.sequence || !owner.linux_satp || !owner.live_satp ||
+	    csr_read(CSR_SATP) != owner.live_satp)
+		panic("NACC exec EXIT owner invariant failed");
+	csr_write(CSR_SATP, owner.linux_satp);
+	local_flush_tlb_all();
+	ret = nacc_linux_runtime_session_consume_enter(
+		&nacc_linux_runtime_session, owner.sequence);
+	if (ret)
+		panic("NACC exec EXIT sequence completion failed (%d)", ret);
+	nacc_linux_runtime_enter_owner =
+		(struct nacc_linux_runtime_enter_owner) { 0 };
+	/* safe Linux root 与空 owner 必须先于可抢占的 mutex release。 */
+	local_irq_enable();
+	mutex_unlock(&nacc_linux_runtime_mutex);
 }
 
 void nacc_linux_runtime_response(struct pt_regs *regs)

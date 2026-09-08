@@ -249,12 +249,52 @@ static void test_protocol_failures(void)
 			"sequence overflow fails without publishing a result");
 }
 
+static void test_enter_sequence_consumption(void)
+{
+	_Alignas(NACC_ENTER_MAILBOX_SIZE)
+		struct nacc_linux_runtime_session session = {};
+	_Alignas(NACC_ENTER_MAILBOX_SIZE)
+		struct nacc_linux_runtime_session future = {};
+	_Alignas(NACC_ENTER_MAILBOX_SIZE)
+		struct nacc_linux_runtime_session overflow = {};
+	struct nacc_runtime_lifecycle_request request = agent_create(42);
+
+	report_contract(!nacc_linux_runtime_session_initialize(&session, 41) &&
+			nacc_linux_runtime_session_consume_enter(&session, 40) ==
+				-ESTALE &&
+			session.state == NACC_RUNTIME_SESSION_IDLE &&
+			session.next_sequence == 41,
+			"stale ENTER completion leaves the idle sequence unchanged");
+	report_contract(!nacc_linux_runtime_session_consume_enter(&session, 41) &&
+			session.state == NACC_RUNTIME_SESSION_IDLE &&
+			session.next_sequence == 42,
+			"exact ENTER completion consumes one idle sequence");
+	report_contract(!nacc_linux_runtime_session_arm(&session, &request),
+			"lifecycle request reuses the sequence after ENTER");
+	report_contract(nacc_linux_runtime_session_consume_enter(&session, 42) ==
+			-EBUSY &&
+			session.state == NACC_RUNTIME_SESSION_PENDING,
+			"ENTER completion cannot consume a pending lifecycle slot");
+	report_contract(!nacc_linux_runtime_session_initialize(&future, 51) &&
+			nacc_linux_runtime_session_consume_enter(&future, 52) ==
+				-EPROTO &&
+			future.state == NACC_RUNTIME_SESSION_FAILED,
+			"future ENTER completion fails the session closed");
+	report_contract(!nacc_linux_runtime_session_initialize(
+			&overflow, UINT64_MAX) &&
+			nacc_linux_runtime_session_consume_enter(
+				&overflow, UINT64_MAX) == -EOVERFLOW &&
+			overflow.state == NACC_RUNTIME_SESSION_FAILED,
+			"overflowing ENTER completion fails the session closed");
+}
+
 int main(void)
 {
 	printf("TAP version 13\n");
 	test_success_and_reuse();
 	test_rejections();
 	test_protocol_failures();
+	test_enter_sequence_consumption();
 	printf("1..%d\n", test_number);
 	return failed;
 }

@@ -26,5 +26,6 @@ asmlinkage void nacc_linux_runtime_response_complete(void) __noreturn;
 
 asmlinkage void nacc_linux_runtime_exit_resume(void);
 asmlinkage void nacc_linux_runtime_exit_complete(void) __noreturn;
+void nacc_linux_runtime_exec_exit_complete(void);
 
 #endif /* _ASM_RISCV_NACC_RUNTIME_H */

@@ -50,8 +50,7 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_exit_complete(void)
 {
 	if (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA)
 		panic("NACC Linux runtime exit continuation invariant failed");
-	/* owner 校验取得 lifecycle mutex，必须先离开 irq-disabled continuation。 */
-	local_irq_enable();
+	nacc_linux_runtime_exec_exit_complete();
 	if (!nacc_exec_is_active_current())
 		panic("NACC Linux runtime exit continuation invariant failed");
 	do_exit(0);

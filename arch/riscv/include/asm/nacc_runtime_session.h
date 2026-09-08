@@ -54,5 +54,8 @@ int nacc_linux_runtime_session_complete(
 	struct nacc_linux_runtime_session *session,
 	nacc_enter_u64 expected_sequence,
 	struct nacc_runtime_lifecycle_result *result);
+int nacc_linux_runtime_session_consume_enter(
+	struct nacc_linux_runtime_session *session,
+	nacc_enter_u64 expected_sequence);
 
 #endif /* _ASM_RISCV_NACC_RUNTIME_SESSION_H */

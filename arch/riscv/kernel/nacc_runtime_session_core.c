@@ -231,3 +231,50 @@ int nacc_linux_runtime_session_complete(
 			 __ATOMIC_RELEASE);
 	return 0;
 }
+
+int nacc_linux_runtime_session_consume_enter(
+	struct nacc_linux_runtime_session *session,
+	nacc_enter_u64 expected_sequence)
+{
+	nacc_enter_u32 expected = NACC_RUNTIME_SESSION_IDLE;
+
+	if (!session || !expected_sequence)
+		return -EINVAL;
+	if (!__atomic_compare_exchange_n(
+		    &session->state, &expected, NACC_RUNTIME_SESSION_COMPLETING,
+		    false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+		return -EBUSY;
+	if (session->reserved ||
+	    memcmp(&session->pending_request,
+		   &(struct nacc_runtime_lifecycle_request) { 0 },
+		   sizeof(session->pending_request)) ||
+	    !nacc_runtime_session_bytes_are_zero(
+		session->response_alignment_padding,
+		sizeof(session->response_alignment_padding)) ||
+	    !nacc_runtime_session_bytes_are_zero(
+		session->response_snapshot,
+		sizeof(session->response_snapshot))) {
+		__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_FAILED,
+				 __ATOMIC_RELEASE);
+		return -EINVAL;
+	}
+	if (expected_sequence < session->next_sequence) {
+		__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_IDLE,
+				 __ATOMIC_RELEASE);
+		return -ESTALE;
+	}
+	if (expected_sequence > session->next_sequence) {
+		__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_FAILED,
+				 __ATOMIC_RELEASE);
+		return -EPROTO;
+	}
+	if (session->next_sequence == ~(nacc_enter_u64)0) {
+		__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_FAILED,
+				 __ATOMIC_RELEASE);
+		return -EOVERFLOW;
+	}
+	session->next_sequence++;
+	__atomic_store_n(&session->state, NACC_RUNTIME_SESSION_IDLE,
+			 __ATOMIC_RELEASE);
+	return 0;
+}
