@@ -4,7 +4,8 @@ CFLAGS += -Wall -Wextra -Werror -O2 $(KHDR_INCLUDES)
 top_srcdir = $(realpath ../../../..)
 CFLAGS += -I$(top_srcdir)/arch/riscv/include
 TEST_GEN_PROGS := nacc_uapi nacc_bootstrap nacc_agent_image nacc_root \
-	nacc_bootstrap_session nacc_lifecycle nacc_live_root nacc_enter
+	nacc_bootstrap_session nacc_lifecycle nacc_live_root nacc_enter \
+	nacc_runtime_lifecycle
 
 include ../lib.mk
 
@@ -63,3 +64,10 @@ $(OUTPUT)/nacc_enter: nacc_enter.c \
 	$(top_srcdir)/arch/riscv/include/asm/nacc_enter.h
 	$(CC) -o$@ $(CFLAGS) $(LDFLAGS) nacc_enter.c \
 		$(top_srcdir)/arch/riscv/kernel/nacc_enter_core.c
+
+$(OUTPUT)/nacc_runtime_lifecycle: nacc_runtime_lifecycle.c \
+	$(top_srcdir)/arch/riscv/kernel/nacc_runtime_lifecycle_core.c \
+	$(top_srcdir)/arch/riscv/include/asm/nacc_runtime_lifecycle.h \
+	$(top_srcdir)/arch/riscv/include/asm/nacc_enter.h
+	$(CC) -o$@ $(CFLAGS) $(LDFLAGS) nacc_runtime_lifecycle.c \
+		$(top_srcdir)/arch/riscv/kernel/nacc_runtime_lifecycle_core.c
