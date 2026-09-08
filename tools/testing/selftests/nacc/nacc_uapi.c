@@ -89,7 +89,12 @@ int main(void)
 		      !(get_abi.header.features &
 			~(NACC_UAPI_FEATURE_BASE |
 			  NACC_UAPI_FEATURE_AGENT_LIFECYCLE |
+			  NACC_UAPI_FEATURE_PREPARE_EXEC |
 			  NACC_UAPI_FEATURE_STATUS)) &&
+		      !!(get_abi.header.features &
+			 NACC_UAPI_FEATURE_AGENT_LIFECYCLE) ==
+			!!(get_abi.header.features &
+			   NACC_UAPI_FEATURE_PREPARE_EXEC) &&
 		      !!(get_abi.header.features &
 			 NACC_UAPI_FEATURE_AGENT_LIFECYCLE) ==
 			!!(get_abi.header.features & NACC_UAPI_FEATURE_STATUS) &&

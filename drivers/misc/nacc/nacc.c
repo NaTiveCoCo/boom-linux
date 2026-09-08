@@ -2,8 +2,7 @@
 /*
  * NACC control device。
  *
- * AS runtime ready 后公布 Agent lifecycle；尚未接入的 exec feature 继续
- * fail closed，避免 required workload 静默降级。
+ * AS runtime ready 后一并公布已接通的 Agent lifecycle 与 exec prepare。
  */
 
 #include <linux/capability.h>
@@ -26,6 +25,7 @@ u64 nacc_supported_features(void)
 
 	if (nacc_linux_runtime_is_ready())
 		features |= NACC_UAPI_FEATURE_AGENT_LIFECYCLE |
+			NACC_UAPI_FEATURE_PREPARE_EXEC |
 			NACC_UAPI_FEATURE_STATUS;
 	return features;
 }
