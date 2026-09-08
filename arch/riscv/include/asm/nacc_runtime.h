@@ -4,6 +4,7 @@
 #define _ASM_RISCV_NACC_RUNTIME_H
 
 #include <linux/linkage.h>
+#include <linux/types.h>
 
 #include <asm/nacc_runtime_lifecycle.h>
 
@@ -11,6 +12,7 @@
 
 struct pt_regs;
 
+bool nacc_linux_runtime_is_ready(void);
 int nacc_linux_runtime_lifecycle_call(
 	const struct nacc_runtime_lifecycle_request *request,
 	struct nacc_runtime_lifecycle_result *result);

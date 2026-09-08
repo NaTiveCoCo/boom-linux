@@ -10,9 +10,9 @@ config NACC
 	depends on RISCV && 64BIT && MMU && !RISCV_M_MODE
 	select RISCV_NACC
 	help
-	  提供 `/dev/nacc` versioned control UAPI。当前实现只公布 ABI
-	  discovery capability；Agent lifecycle 与 exec prepare backend 未接入时，
-	  对应 ioctl 必须返回明确错误，不能把 required workload 降级为普通执行。
+	  提供 `/dev/nacc` versioned control UAPI。AS runtime ready 后公布 Agent
+	  lifecycle；exec prepare backend 未接入时，对应 ioctl 必须返回明确错误，
+	  不能把 required workload 降级为普通执行。
 
 config SENSORS_LIS3LV02D
 	tristate

@@ -19,11 +19,13 @@
 #include <linux/sched/task.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 #include <asm/nacc_bootstrap.h>
 #include <asm/nacc_enter.h>
 #include <asm/nacc_live_root.h>
 #include <asm/nacc_root.h>
+#include <asm/nacc_runtime.h>
 
 #include "nacc_internal.h"
 
@@ -34,6 +36,10 @@
 struct nacc_agent_object {
 	struct kref reference;
 	struct nacc_lifecycle_agent lifecycle;
+	struct work_struct runtime_retire_work;
+	struct nacc_runtime_object_ref runtime_ref;
+	bool runtime_ready;
+	bool runtime_retiring;
 	bool orphaned;
 };
 
@@ -64,6 +70,67 @@ static DEFINE_MUTEX(nacc_object_lock);
 static LIST_HEAD(nacc_prepare_objects);
 static atomic64_t nacc_agent_generation = ATOMIC64_INIT(0);
 
+static void nacc_agent_free(struct kref *reference);
+
+static bool nacc_runtime_ref_equal(struct nacc_runtime_object_ref left,
+				   struct nacc_runtime_object_ref right)
+{
+	return left.handle == right.handle &&
+	       left.generation == right.generation;
+}
+
+static bool nacc_runtime_ref_is_zero(struct nacc_runtime_object_ref ref)
+{
+	return !ref.handle && !ref.generation;
+}
+
+static int nacc_agent_runtime_retire(struct nacc_agent_object *agent)
+{
+	const struct nacc_runtime_lifecycle_request request = {
+		.opcode = NACC_RUNTIME_AGENT_RETIRE_OPCODE,
+		.agent = agent->runtime_ref,
+	};
+	struct nacc_runtime_lifecycle_result result;
+	int ret;
+
+	if (!agent->runtime_ready || !agent->runtime_retiring ||
+	    nacc_runtime_ref_is_zero(agent->runtime_ref))
+		panic("NACC Agent runtime retire state is invalid");
+	ret = nacc_linux_runtime_lifecycle_call(&request, &result);
+	if (ret)
+		return ret;
+	if (result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK ||
+	    !nacc_runtime_ref_equal(result.agent, agent->runtime_ref) ||
+	    !nacc_runtime_ref_is_zero(result.mm) ||
+	    !nacc_runtime_ref_is_zero(result.thread))
+		panic("NACC Agent runtime retire response is invalid");
+	return 0;
+}
+
+static void nacc_agent_runtime_retire_worker(struct work_struct *work)
+{
+	struct nacc_agent_object *agent = container_of(
+		work, struct nacc_agent_object, runtime_retire_work);
+	int ret;
+
+	ret = nacc_agent_runtime_retire(agent);
+	if (ret)
+		panic("NACC orphaned Agent runtime retire failed (%d)", ret);
+	mutex_lock(&nacc_object_lock);
+	if (!agent->orphaned || !agent->runtime_ready ||
+	    !agent->runtime_retiring || agent->lifecycle.transaction_count ||
+	    agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DESTROYING)
+		panic("NACC orphaned Agent runtime retire lost ownership");
+	agent->runtime_ref = (struct nacc_runtime_object_ref) { 0 };
+	agent->runtime_ready = false;
+	agent->runtime_retiring = false;
+	ret = nacc_lifecycle_finish_destroy(&agent->lifecycle);
+	if (ret)
+		panic("NACC orphaned Agent cannot finish destroy (%d)", ret);
+	mutex_unlock(&nacc_object_lock);
+	kref_put(&agent->reference, nacc_agent_free);
+}
+
 static u64 nacc_target_identity(const struct task_struct *target)
 {
 	return (u64)(uintptr_t)target;
@@ -77,6 +144,15 @@ static void nacc_finish_destroy_if_drained(struct nacc_agent_object *agent)
 	    agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DESTROYING ||
 	    agent->lifecycle.transaction_count)
 		return;
+	if (agent->runtime_ready) {
+		if (agent->runtime_retiring)
+			panic("NACC drained Agent runtime retire is duplicated");
+		agent->runtime_retiring = true;
+		kref_get(&agent->reference);
+		if (!schedule_work(&agent->runtime_retire_work))
+			panic("NACC drained Agent runtime retire work was pending");
+		return;
+	}
 	ret = nacc_lifecycle_finish_destroy(&agent->lifecycle);
 	if (ret)
 		panic("NACC drained Agent cannot finish destroy (%d)", ret);
@@ -93,6 +169,9 @@ static void nacc_agent_free(struct kref *reference)
 		panic("NACC freeing Agent with live transactions");
 	if (agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DEAD)
 		panic("NACC freeing non-DEAD Agent");
+	if (agent->runtime_ready || agent->runtime_retiring ||
+	    !nacc_runtime_ref_is_zero(agent->runtime_ref))
+		panic("NACC freeing Agent with a runtime identity");
 	kfree(agent);
 }
 
@@ -180,6 +259,9 @@ static int nacc_match_control_agent(const struct nacc_control *control,
 {
 	if (!control->agent)
 		return -ENOENT;
+	if (!control->agent->runtime_ready ||
+	    control->agent->runtime_retiring)
+		return -EBUSY;
 	if (control->agent->lifecycle.agent_cookie != cookie ||
 	    control->agent->lifecycle.agent_generation != generation)
 		return -ESTALE;
@@ -669,8 +751,11 @@ int nacc_control_release(struct file *file)
 	mutex_lock(&nacc_object_lock);
 	agent = control->agent;
 	control->agent = NULL;
-	if (agent)
+	if (agent) {
+		if (!agent->runtime_ready || agent->runtime_retiring)
+			panic("NACC control close found unpublished runtime state");
 		agent->orphaned = true;
+	}
 	if (agent && agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DEAD &&
 	    agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DESTROYING) {
 		ret = nacc_lifecycle_begin_destroy(
@@ -679,11 +764,8 @@ int nacc_control_release(struct file *file)
 		if (ret)
 			panic("NACC control close cannot begin destroy (%d)", ret);
 	}
-	if (agent && !agent->lifecycle.transaction_count) {
-		ret = nacc_lifecycle_finish_destroy(&agent->lifecycle);
-		if (ret && ret != -EALREADY)
-			panic("NACC control close cannot finish destroy (%d)", ret);
-	}
+	if (agent)
+		nacc_finish_destroy_if_drained(agent);
 	mutex_unlock(&nacc_object_lock);
 	if (agent)
 		kref_put(&agent->reference, nacc_agent_free);
@@ -697,6 +779,10 @@ long nacc_create_agent(struct file *file, void __user *argument,
 	struct nacc_ioc_create_agent request;
 	struct nacc_control *control = file->private_data;
 	struct nacc_agent_object *agent;
+	const struct nacc_runtime_lifecycle_request runtime_request = {
+		.opcode = NACC_RUNTIME_AGENT_CREATE_OPCODE,
+	};
+	struct nacc_runtime_lifecycle_result runtime_result;
 	u64 cookie;
 	u64 generation;
 	int ret;
@@ -712,6 +798,7 @@ long nacc_create_agent(struct file *file, void __user *argument,
 	if (!agent)
 		return -ENOMEM;
 	kref_init(&agent->reference);
+	INIT_WORK(&agent->runtime_retire_work, nacc_agent_runtime_retire_worker);
 	do {
 		cookie = get_random_u64();
 	} while (!cookie);
@@ -732,31 +819,77 @@ long nacc_create_agent(struct file *file, void __user *argument,
 		kref_put(&agent->reference, nacc_agent_free);
 		return -EALREADY;
 	}
+	control->agent = agent;
 	mutex_unlock(&nacc_object_lock);
+
+	ret = nacc_linux_runtime_lifecycle_call(&runtime_request,
+						&runtime_result);
+	if (ret)
+		goto out_discard_local;
+	if (runtime_result.status == NACC_RUNTIME_LIFECYCLE_STATUS_CAPACITY) {
+		ret = -ENOSPC;
+		goto out_discard_local;
+	}
+	if (runtime_result.status != NACC_RUNTIME_LIFECYCLE_STATUS_OK ||
+	    nacc_runtime_ref_is_zero(runtime_result.agent) ||
+	    !nacc_runtime_ref_is_zero(runtime_result.mm) ||
+	    !nacc_runtime_ref_is_zero(runtime_result.thread))
+		panic("NACC Agent runtime create response is invalid");
+	mutex_lock(&nacc_object_lock);
+	if (control->agent != agent || agent->runtime_ready ||
+	    agent->runtime_retiring ||
+	    !nacc_runtime_ref_is_zero(agent->runtime_ref))
+		panic("NACC Agent runtime create lost control ownership");
+	agent->runtime_ref = runtime_result.agent;
+	agent->runtime_ready = true;
+	/* user copy 完成前阻止同一 control FD 观察未发布的 Agent。 */
+	agent->runtime_retiring = true;
+	mutex_unlock(&nacc_object_lock);
+
 	request.agent_cookie = cookie;
 	request.agent_generation = generation;
-	request.header.features = NACC_UAPI_FEATURE_BASE;
+	request.header.features = nacc_supported_features();
 	if (copy_to_user(argument, &request, sizeof(request))) {
+		ret = nacc_agent_runtime_retire(agent);
+		if (ret)
+			panic("NACC Agent create runtime rollback failed (%d)", ret);
+		mutex_lock(&nacc_object_lock);
+		if (control->agent != agent || !agent->runtime_ready ||
+		    !agent->runtime_retiring)
+			panic("NACC Agent create rollback lost ownership");
+		agent->runtime_ref = (struct nacc_runtime_object_ref) { 0 };
+		agent->runtime_ready = false;
+		agent->runtime_retiring = false;
+		control->agent = NULL;
 		ret = nacc_lifecycle_begin_destroy(&agent->lifecycle, cookie,
 						   generation);
 		if (ret || nacc_lifecycle_finish_destroy(&agent->lifecycle))
-			panic("NACC Agent create rollback failed");
+			panic("NACC Agent create local rollback failed");
+		mutex_unlock(&nacc_object_lock);
 		kref_put(&agent->reference, nacc_agent_free);
 		return -EFAULT;
 	}
 	mutex_lock(&nacc_object_lock);
-	if (control->agent) {
-		mutex_unlock(&nacc_object_lock);
-		ret = nacc_lifecycle_begin_destroy(&agent->lifecycle, cookie,
-						   generation);
-		if (ret || nacc_lifecycle_finish_destroy(&agent->lifecycle))
-			panic("NACC raced Agent cleanup failed");
-		kref_put(&agent->reference, nacc_agent_free);
-		return -EALREADY;
-	}
-	control->agent = agent;
+	if (control->agent != agent || !agent->runtime_ready ||
+	    !agent->runtime_retiring)
+		panic("NACC Agent create publication lost ownership");
+	agent->runtime_retiring = false;
 	mutex_unlock(&nacc_object_lock);
 	return 0;
+
+out_discard_local:
+	mutex_lock(&nacc_object_lock);
+	if (control->agent != agent || agent->runtime_ready ||
+	    agent->runtime_retiring ||
+	    !nacc_runtime_ref_is_zero(agent->runtime_ref))
+		panic("NACC failed Agent create retained runtime state");
+	control->agent = NULL;
+	if (nacc_lifecycle_begin_destroy(&agent->lifecycle, cookie, generation) ||
+	    nacc_lifecycle_finish_destroy(&agent->lifecycle))
+		panic("NACC failed Agent create local cleanup failed");
+	mutex_unlock(&nacc_object_lock);
+	kref_put(&agent->reference, nacc_agent_free);
+	return ret;
 }
 
 long nacc_prepare_exec(struct file *file, void __user *argument,
@@ -843,7 +976,7 @@ long nacc_prepare_exec(struct file *file, void __user *argument,
 		return fd;
 	}
 	request.prepare_fd = fd;
-	request.header.features = NACC_UAPI_FEATURE_BASE;
+	request.header.features = nacc_supported_features();
 	if (copy_to_user(argument, &request, sizeof(request))) {
 		put_unused_fd(fd);
 		fput(prepare_file);
@@ -895,7 +1028,7 @@ long nacc_query_status(struct file *file, void __user *argument,
 	mutex_unlock(&nacc_object_lock);
 	if (ret)
 		return ret;
-	request.header.features = NACC_UAPI_FEATURE_BASE;
+	request.header.features = nacc_supported_features();
 	return copy_to_user(argument, &request, sizeof(request)) ? -EFAULT : 0;
 }
 
@@ -925,9 +1058,32 @@ long nacc_destroy_agent(struct file *file, void __user *argument,
 		if (ret)
 			goto out_unlock;
 	}
+	if (agent->lifecycle.transaction_count) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+	if (!agent->runtime_ready || agent->runtime_retiring)
+		panic("NACC explicit destroy found invalid runtime state");
+	agent->runtime_retiring = true;
+	mutex_unlock(&nacc_object_lock);
+
+	ret = nacc_agent_runtime_retire(agent);
+	mutex_lock(&nacc_object_lock);
+	if (control->agent != agent || !agent->runtime_ready ||
+	    !agent->runtime_retiring || agent->lifecycle.transaction_count ||
+	    agent->lifecycle.state != NACC_LIFECYCLE_AGENT_DESTROYING)
+		panic("NACC explicit destroy lost runtime ownership");
+	if (ret) {
+		agent->runtime_retiring = false;
+		goto out_unlock;
+	}
+	agent->runtime_ref = (struct nacc_runtime_object_ref) { 0 };
+	agent->runtime_ready = false;
+	agent->runtime_retiring = false;
 	ret = nacc_lifecycle_finish_destroy(&agent->lifecycle);
-	if (!ret)
-		control->agent = NULL;
+	if (ret)
+		panic("NACC explicit destroy cannot finish local state (%d)", ret);
+	control->agent = NULL;
 out_unlock:
 	mutex_unlock(&nacc_object_lock);
 	if (!ret)

@@ -11,7 +11,7 @@
 
 #include "../kselftest.h"
 
-#define NACC_LIVE_TEST_COUNT 7
+#define NACC_LIVE_TEST_COUNT 9
 
 static_assert(sizeof(struct nacc_uapi_header) == 48, "UAPI header size");
 static_assert(sizeof(struct nacc_ioc_get_abi) == 64, "GET_ABI size");
@@ -56,8 +56,11 @@ static void skip_live_tests(const char *reason)
 int main(void)
 {
 	struct nacc_ioc_create_agent create_agent = {};
+	struct nacc_ioc_destroy_agent destroy_agent = {};
 	struct nacc_ioc_get_abi get_abi = {};
+	struct nacc_ioc_query_status query_status = {};
 	unsigned long short_command;
+	uint64_t supported_features;
 	int device;
 	int result;
 
@@ -82,9 +85,17 @@ int main(void)
 		      get_abi.header.abi_major == NACC_UAPI_ABI_MAJOR &&
 		      get_abi.header.abi_minor == NACC_UAPI_ABI_MINOR &&
 		      get_abi.header.struct_size == sizeof(get_abi) &&
-		      get_abi.header.features == NACC_UAPI_FEATURE_BASE &&
+		      (get_abi.header.features & NACC_UAPI_FEATURE_BASE) &&
+		      !(get_abi.header.features &
+			~(NACC_UAPI_FEATURE_BASE |
+			  NACC_UAPI_FEATURE_AGENT_LIFECYCLE |
+			  NACC_UAPI_FEATURE_STATUS)) &&
+		      !!(get_abi.header.features &
+			 NACC_UAPI_FEATURE_AGENT_LIFECYCLE) ==
+			!!(get_abi.header.features & NACC_UAPI_FEATURE_STATUS) &&
 		      get_abi.abi_magic == NACC_UAPI_ABI_MAGIC,
 		      "GET_ABI returns the supported contract");
+	supported_features = get_abi.header.features;
 
 	memset(&get_abi, 0, sizeof(get_abi));
 	initialize_header(&get_abi.header, sizeof(get_abi));
@@ -130,8 +141,33 @@ int main(void)
 	initialize_header(&create_agent.header, sizeof(create_agent));
 	errno = 0;
 	result = ioctl(device, NACC_IOC_CREATE_AGENT, &create_agent);
-	report_result(result == -1 && errno == EOPNOTSUPP,
-		      "unadvertised Agent lifecycle fails closed");
+	if (!(supported_features & NACC_UAPI_FEATURE_AGENT_LIFECYCLE)) {
+		report_result(result == -1 && errno == EOPNOTSUPP,
+			      "unadvertised Agent lifecycle fails closed");
+		ksft_test_result_skip("Agent lifecycle is not ready\n");
+		ksft_test_result_skip("Agent lifecycle is not ready\n");
+	} else {
+		report_result(result == 0 && create_agent.agent_cookie &&
+			      create_agent.agent_generation &&
+			      create_agent.header.features == supported_features,
+			      "CREATE_AGENT publishes an AS-backed identity");
+
+		initialize_header(&query_status.header, sizeof(query_status));
+		query_status.agent_cookie = create_agent.agent_cookie;
+		query_status.agent_generation = create_agent.agent_generation;
+		result = ioctl(device, NACC_IOC_QUERY_STATUS, &query_status);
+		report_result(result == 0 &&
+			      query_status.status == NACC_AGENT_STATUS_CREATED &&
+			      query_status.header.features == supported_features,
+			      "QUERY_STATUS observes the created Agent");
+
+		initialize_header(&destroy_agent.header, sizeof(destroy_agent));
+		destroy_agent.agent_cookie = create_agent.agent_cookie;
+		destroy_agent.agent_generation = create_agent.agent_generation;
+		result = ioctl(device, NACC_IOC_DESTROY_AGENT, &destroy_agent);
+		report_result(result == 0,
+			      "DESTROY_AGENT retires the AS-backed identity");
+	}
 
 	close(device);
 	return failures ? KSFT_FAIL : KSFT_PASS;

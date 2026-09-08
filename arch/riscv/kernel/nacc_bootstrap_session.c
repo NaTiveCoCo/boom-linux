@@ -14,6 +14,7 @@
 #include <asm/nacc_bootstrap.h>
 #include <asm/nacc_bootstrap_session.h>
 #include <asm/nacc_root.h>
+#include <asm/nacc_runtime.h>
 #include <asm/ptrace.h>
 #include <asm/sbi.h>
 #include <asm/tlbflush.h>
@@ -134,6 +135,11 @@ u64 nacc_linux_runtime_entry_snapshot(void)
 	if (!nacc_linux_bootstrap_session_is_ready(&nacc_linux_session))
 		panic("NACC runtime entry is unavailable");
 	return nacc_linux_session.runtime_entry_address;
+}
+
+bool nacc_linux_runtime_is_ready(void)
+{
+	return nacc_linux_bootstrap_session_is_ready(&nacc_linux_session);
 }
 
 asmlinkage __visible __noreturn void nacc_linux_bootstrap_complete(void)

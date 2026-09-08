@@ -2,8 +2,8 @@
 /*
  * NACC control device。
  *
- * 当前只实现 UAPI discovery。Agent lifecycle backend 接入前不公布对应
- * feature，并对这些命令 fail closed，避免 required workload 静默降级。
+ * AS runtime ready 后公布 Agent lifecycle；尚未接入的 exec feature 继续
+ * fail closed，避免 required workload 静默降级。
  */
 
 #include <linux/capability.h>
@@ -16,9 +16,19 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 
+#include <asm/nacc_runtime.h>
+
 #include "nacc_internal.h"
 
-#define NACC_SUPPORTED_FEATURES NACC_UAPI_FEATURE_BASE
+u64 nacc_supported_features(void)
+{
+	u64 features = NACC_UAPI_FEATURE_BASE;
+
+	if (nacc_linux_runtime_is_ready())
+		features |= NACC_UAPI_FEATURE_AGENT_LIFECYCLE |
+			NACC_UAPI_FEATURE_STATUS;
+	return features;
+}
 
 int nacc_validate_header(const struct nacc_uapi_header *header,
 			 size_t user_size)
@@ -29,7 +39,7 @@ int nacc_validate_header(const struct nacc_uapi_header *header,
 		return -EPROTONOSUPPORT;
 	if (header->abi_minor > NACC_UAPI_ABI_MINOR)
 		return -EPROTONOSUPPORT;
-	if (header->features & ~NACC_SUPPORTED_FEATURES)
+	if (header->features & ~nacc_supported_features())
 		return -EOPNOTSUPP;
 	if (memchr_inv(header->reserved, 0, sizeof(header->reserved)))
 		return -EINVAL;
@@ -60,7 +70,7 @@ static long nacc_get_abi(void __user *user_argument, size_t user_size)
 	response.header.abi_major = NACC_UAPI_ABI_MAJOR;
 	response.header.abi_minor = NACC_UAPI_ABI_MINOR;
 	response.header.struct_size = sizeof(response);
-	response.header.features = NACC_SUPPORTED_FEATURES;
+	response.header.features = nacc_supported_features();
 	response.abi_magic = NACC_UAPI_ABI_MAGIC;
 	response.max_ioctl_size = NACC_UAPI_MAX_IOCTL_SIZE_V1;
 
@@ -74,6 +84,7 @@ static long nacc_ioctl(struct file *file, unsigned int command,
 		       unsigned long argument)
 {
 	void __user *user_argument = (void __user *)argument;
+	u64 supported_features = nacc_supported_features();
 
 	if (_IOC_TYPE(command) != NACC_IOC_MAGIC ||
 	    _IOC_DIR(command) != (_IOC_READ | _IOC_WRITE))
@@ -83,19 +94,19 @@ static long nacc_ioctl(struct file *file, unsigned int command,
 	case NACC_IOC_NR_GET_ABI:
 		return nacc_get_abi(user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_CREATE_AGENT:
-		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
+		if (!(supported_features & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
 			return -EOPNOTSUPP;
 		return nacc_create_agent(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_PREPARE_EXEC:
-		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_PREPARE_EXEC))
+		if (!(supported_features & NACC_UAPI_FEATURE_PREPARE_EXEC))
 			return -EOPNOTSUPP;
 		return nacc_prepare_exec(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_QUERY_STATUS:
-		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_STATUS))
+		if (!(supported_features & NACC_UAPI_FEATURE_STATUS))
 			return -EOPNOTSUPP;
 		return nacc_query_status(file, user_argument, _IOC_SIZE(command));
 	case NACC_IOC_NR_DESTROY_AGENT:
-		if (!(NACC_SUPPORTED_FEATURES & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
+		if (!(supported_features & NACC_UAPI_FEATURE_AGENT_LIFECYCLE))
 			return -EOPNOTSUPP;
 		return nacc_destroy_agent(file, user_argument, _IOC_SIZE(command));
 	default:
