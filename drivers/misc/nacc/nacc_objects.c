@@ -54,6 +54,7 @@ struct nacc_prepare_object {
 	bool elf_preflight_claimed;
 	bool elf_staging;
 	bool elf_payload_valid;
+	bool exec_attempt_claimed;
 	struct nacc_lifecycle_exec lifecycle;
 	int elf_preflight_errno;
 	int post_ponr_errno;
@@ -104,6 +105,7 @@ static void nacc_prepare_free(struct kref *reference)
 	    prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY || prepare->mm ||
 	    prepare->live_root ||
 	    prepare->elf_preflight_claimed || prepare->elf_staging ||
+	    prepare->exec_attempt_claimed ||
 	    prepare->elf_preflight_errno ||
 	    prepare->elf_payload_valid != !!prepare->elf_code_prefix ||
 	    (prepare->elf_payload_valid && !prepare->elf_code_prefix_length))
@@ -124,8 +126,8 @@ static int nacc_prepare_release(struct inode *inode, struct file *file)
 	(void)inode;
 	mutex_lock(&nacc_object_lock);
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
-		/* ELF preflight 后 transaction 已由 target 接管，不能由 FD close 撤销。 */
-		if (!prepare->elf_preflight_claimed) {
+		/* exec attempt begin 后 transaction 已由 target 接管，FD close 不能撤销。 */
+		if (!prepare->exec_attempt_claimed) {
 			ret = nacc_lifecycle_abort_prepare(
 				&prepare->agent->lifecycle, &prepare->lifecycle,
 				target, generation);
@@ -196,6 +198,71 @@ static struct nacc_prepare_object *nacc_find_prepare_locked(
 	return NULL;
 }
 
+static struct nacc_prepare_object *nacc_attempt_prepare_locked(
+	const struct nacc_exec_attempt *attempt)
+{
+	struct nacc_prepare_object *prepare;
+
+	if (!attempt || !attempt->captured)
+		panic("NACC exec hook received an uncaptured attempt");
+	if (!attempt->prepare) {
+		if (attempt->prepare_generation)
+			panic("NACC negative exec snapshot has a generation");
+		return NULL;
+	}
+	prepare = attempt->prepare;
+	if (!attempt->prepare_generation || prepare->target != current)
+		panic("NACC exec attempt identity is invalid");
+	if (prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_EMPTY &&
+	    (list_empty(&prepare->list) ||
+	     prepare->lifecycle.prepare_generation !=
+		     attempt->prepare_generation))
+		panic("NACC exec attempt generation changed");
+	return prepare;
+}
+
+void nacc_exec_attempt_begin(struct nacc_exec_attempt *attempt)
+{
+	struct nacc_prepare_object *prepare;
+
+	if (!attempt || attempt->captured || attempt->prepare ||
+	    attempt->prepare_generation)
+		panic("NACC exec attempt begin received dirty storage");
+	mutex_lock(&nacc_object_lock);
+	prepare = nacc_find_prepare_locked(current);
+	if (prepare) {
+		if (!prepare->lifecycle.prepare_generation ||
+		    prepare->exec_attempt_claimed)
+			panic("NACC exec attempt found an invalid transaction claim");
+		kref_get(&prepare->reference);
+		prepare->exec_attempt_claimed = true;
+		attempt->prepare = prepare;
+		attempt->prepare_generation =
+			prepare->lifecycle.prepare_generation;
+	}
+	attempt->captured = true;
+	mutex_unlock(&nacc_object_lock);
+}
+
+void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt)
+{
+	struct nacc_prepare_object *prepare;
+
+	if (!attempt || !attempt->captured)
+		panic("NACC exec attempt release received invalid state");
+	prepare = attempt->prepare;
+	mutex_lock(&nacc_object_lock);
+	if (prepare) {
+		if (!prepare->exec_attempt_claimed)
+			panic("NACC exec attempt lost its object claim");
+		prepare->exec_attempt_claimed = false;
+	}
+	memset(attempt, 0, sizeof(*attempt));
+	mutex_unlock(&nacc_object_lock);
+	if (prepare)
+		kref_put(&prepare->reference, nacc_prepare_free);
+}
+
 static int nacc_prepare_reserve_minimal_live_root(
 	struct nacc_prepare_object *prepare)
 {
@@ -215,7 +282,8 @@ static int nacc_prepare_reserve_minimal_live_root(
 		nacc_root_result_snapshot(), &request);
 }
 
-int nacc_exec_prepare_elf_current(struct file *executable,
+int nacc_exec_prepare_elf(const struct nacc_exec_attempt *attempt,
+			  struct file *executable,
 				  bool fixed_executable,
 				  bool direct_executable,
 				  bool has_interpreter, u32 load_segment_count,
@@ -248,9 +316,13 @@ int nacc_exec_prepare_elf_current(struct file *executable,
 	int ret = 0;
 
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (!prepare)
 		goto out_unlock;
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_EMPTY) {
+		ret = -ESTALE;
+		goto out_unlock;
+	}
 	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_ACTIVE) {
 		ret = -EOPNOTSUPP;
 		goto out_unlock;
@@ -337,13 +409,13 @@ out_unlock:
 	return ret;
 }
 
-int nacc_exec_commit_current(void)
+int nacc_exec_commit(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
 	int ret = 0;
 
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (prepare && prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_PREPARED) {
 		if (!prepare->elf_payload_valid) {
 			ret = -ENOEXEC;
@@ -379,14 +451,18 @@ out_unlock:
 	return ret;
 }
 
-bool nacc_exec_abort_current(void)
+bool nacc_exec_abort(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
 	int ret;
 
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (!prepare) {
+		mutex_unlock(&nacc_object_lock);
+		return false;
+	}
+	if (prepare->lifecycle.state == NACC_LIFECYCLE_EXEC_EMPTY) {
 		mutex_unlock(&nacc_object_lock);
 		return false;
 	}
@@ -412,7 +488,7 @@ bool nacc_exec_abort_current(void)
 	return true;
 }
 
-void nacc_exec_bind_mm_current(void)
+void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
 	struct mm_struct *old_mm = NULL;
@@ -420,7 +496,7 @@ void nacc_exec_bind_mm_current(void)
 	if (!current->mm)
 		panic("NACC exec installed a missing mm");
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (!prepare) {
 		mutex_unlock(&nacc_object_lock);
 		return;
@@ -443,13 +519,13 @@ void nacc_exec_bind_mm_current(void)
 		mmput(old_mm);
 }
 
-void nacc_exec_activate_current(void)
+void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 {
 	struct nacc_prepare_object *prepare;
 	int ret;
 
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (!prepare) {
 		mutex_unlock(&nacc_object_lock);
 		return;
@@ -491,14 +567,15 @@ bool nacc_exec_is_active_current(void)
 	return active;
 }
 
-void nacc_exec_record_failure_current(int failure_errno)
+void nacc_exec_record_failure(const struct nacc_exec_attempt *attempt,
+			      int failure_errno)
 {
 	struct nacc_prepare_object *prepare;
 
 	if (failure_errno <= 0)
 		panic("NACC exec recorded invalid failure errno");
 	mutex_lock(&nacc_object_lock);
-	prepare = nacc_find_prepare_locked(current);
+	prepare = nacc_attempt_prepare_locked(attempt);
 	if (prepare) {
 		if ((prepare->lifecycle.state != NACC_LIFECYCLE_EXEC_COMMITTED &&
 		     prepare->lifecycle.state !=
@@ -719,6 +796,11 @@ long nacc_prepare_exec(struct file *file, void __user *argument,
 	prepare->target = target;
 
 	mutex_lock(&nacc_object_lock);
+	/* PF_EXITING 先于 task 的唯一 NACC exit sweep 发布，之后不得新增对象。 */
+	if (READ_ONCE(target->flags) & PF_EXITING) {
+		ret = -ESRCH;
+		goto out_unlock_free;
+	}
 	ret = nacc_match_control_agent(control, request.agent_cookie,
 				       request.agent_generation);
 	if (ret)

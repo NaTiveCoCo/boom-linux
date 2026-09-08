@@ -1253,7 +1253,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	retval = bprm_creds_from_file(bprm);
 	if (retval)
 		return retval;
-	retval = nacc_exec_commit_current();
+	retval = nacc_exec_commit(bprm->nacc_exec_attempt);
 	if (retval)
 		return retval;
 
@@ -1302,7 +1302,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 		goto out;
 
 	bprm->mm = NULL;
-	nacc_exec_bind_mm_current();
+	nacc_exec_bind_mm(bprm->nacc_exec_attempt);
 
 	retval = exec_task_namespaces();
 	if (retval)
@@ -1468,7 +1468,7 @@ void finalize_exec(struct linux_binprm *bprm)
 	task_lock(current->group_leader);
 	current->signal->rlim[RLIMIT_STACK] = bprm->rlim_stack;
 	task_unlock(current->group_leader);
-	nacc_exec_activate_current();
+	nacc_exec_activate(bprm->nacc_exec_attempt);
 }
 EXPORT_SYMBOL(finalize_exec);
 
@@ -1905,7 +1905,8 @@ static bool exec_error_may_restart(int error)
 static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
-			      int flags)
+			      int flags,
+			      struct nacc_exec_attempt *nacc_attempt)
 {
 	struct linux_binprm *bprm;
 	bool nacc_aborted;
@@ -1935,6 +1936,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 		retval = PTR_ERR(bprm);
 		goto out_abort;
 	}
+	bprm->nacc_exec_attempt = nacc_attempt;
 
 	retval = count(argv, MAX_ARG_STRINGS);
 	if (retval == 0)
@@ -1983,10 +1985,12 @@ static int do_execveat_common(int fd, struct filename *filename,
 out_free:
 	if (retval < 0) {
 		if (bprm->point_of_no_return)
-			nacc_exec_record_failure_current(-retval);
-		else if (!exec_error_always_restarts(retval)) {
-			nacc_aborted = nacc_exec_abort_current();
-			if (nacc_aborted && exec_error_may_restart(retval))
+			nacc_exec_record_failure(nacc_attempt, -retval);
+		else {
+			nacc_aborted = nacc_exec_abort(nacc_attempt);
+			if (nacc_aborted &&
+			    (exec_error_always_restarts(retval) ||
+			     exec_error_may_restart(retval)))
 				retval = -EINTR;
 		}
 	}
@@ -1994,18 +1998,20 @@ out_free:
 
 out_ret:
 	putname(filename);
+	nacc_exec_attempt_release(nacc_attempt);
 	return retval;
 
 out_abort:
-	if (!exec_error_always_restarts(retval)) {
-		if (nacc_exec_abort_current() && exec_error_may_restart(retval))
-			retval = -EINTR;
-	}
+	if (nacc_exec_abort(nacc_attempt) &&
+	    (exec_error_always_restarts(retval) ||
+	     exec_error_may_restart(retval)))
+		retval = -EINTR;
 	goto out_ret;
 
 out_bad_filename:
 	retval = PTR_ERR(filename);
-	nacc_exec_abort_current();
+	nacc_exec_abort(nacc_attempt);
+	nacc_exec_attempt_release(nacc_attempt);
 	return retval;
 }
 
@@ -2014,22 +2020,27 @@ int kernel_execve(const char *kernel_filename,
 {
 	struct filename *filename;
 	struct linux_binprm *bprm;
+	struct nacc_exec_attempt nacc_attempt = {};
 	int fd = AT_FDCWD;
 	int retval;
 
 	/* It is non-sense for kernel threads to call execve */
 	if (WARN_ON_ONCE(current->flags & PF_KTHREAD))
 		return -EINVAL;
+	nacc_exec_attempt_begin(&nacc_attempt);
 
 	filename = getname_kernel(kernel_filename);
-	if (IS_ERR(filename))
-		return PTR_ERR(filename);
+	if (IS_ERR(filename)) {
+		retval = PTR_ERR(filename);
+		goto out_abort;
+	}
 
 	bprm = alloc_bprm(fd, filename);
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
-		goto out_ret;
+		goto out_abort_ret;
 	}
+	bprm->nacc_exec_attempt = &nacc_attempt;
 
 	retval = count_strings_kernel(argv);
 	if (WARN_ON_ONCE(retval == 0))
@@ -2062,36 +2073,55 @@ int kernel_execve(const char *kernel_filename,
 
 	retval = bprm_execve(bprm, fd, filename, 0);
 out_free:
+	if (retval < 0) {
+		if (bprm->point_of_no_return)
+			nacc_exec_record_failure(&nacc_attempt, -retval);
+		else
+			nacc_exec_abort(&nacc_attempt);
+	}
 	free_bprm(bprm);
 out_ret:
 	putname(filename);
+	nacc_exec_attempt_release(&nacc_attempt);
+	return retval;
+
+out_abort_ret:
+	nacc_exec_abort(&nacc_attempt);
+	goto out_ret;
+
+out_abort:
+	nacc_exec_abort(&nacc_attempt);
+	nacc_exec_attempt_release(&nacc_attempt);
 	return retval;
 }
 
 static int do_execve(struct filename *filename,
 	const char __user *const __user *__argv,
-	const char __user *const __user *__envp)
+	const char __user *const __user *__envp,
+	struct nacc_exec_attempt *nacc_attempt)
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
-	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0,
+				nacc_attempt);
 }
 
 static int do_execveat(int fd, struct filename *filename,
 		const char __user *const __user *__argv,
 		const char __user *const __user *__envp,
-		int flags)
+		int flags, struct nacc_exec_attempt *nacc_attempt)
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
 
-	return do_execveat_common(fd, filename, argv, envp, flags);
+	return do_execveat_common(fd, filename, argv, envp, flags, nacc_attempt);
 }
 
 #ifdef CONFIG_COMPAT
 static int compat_do_execve(struct filename *filename,
 	const compat_uptr_t __user *__argv,
-	const compat_uptr_t __user *__envp)
+	const compat_uptr_t __user *__envp,
+	struct nacc_exec_attempt *nacc_attempt)
 {
 	struct user_arg_ptr argv = {
 		.is_compat = true,
@@ -2101,13 +2131,14 @@ static int compat_do_execve(struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
-	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0,
+				nacc_attempt);
 }
 
 static int compat_do_execveat(int fd, struct filename *filename,
-			      const compat_uptr_t __user *__argv,
-			      const compat_uptr_t __user *__envp,
-			      int flags)
+		const compat_uptr_t __user *__argv,
+		const compat_uptr_t __user *__envp,
+		int flags, struct nacc_exec_attempt *nacc_attempt)
 {
 	struct user_arg_ptr argv = {
 		.is_compat = true,
@@ -2117,7 +2148,7 @@ static int compat_do_execveat(int fd, struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
-	return do_execveat_common(fd, filename, argv, envp, flags);
+	return do_execveat_common(fd, filename, argv, envp, flags, nacc_attempt);
 }
 #endif
 
@@ -2150,7 +2181,12 @@ SYSCALL_DEFINE3(execve,
 		const char __user *const __user *, argv,
 		const char __user *const __user *, envp)
 {
-	return do_execve(getname(filename), argv, envp);
+	struct nacc_exec_attempt nacc_attempt = {};
+	struct filename *name;
+
+	nacc_exec_attempt_begin(&nacc_attempt);
+	name = getname(filename);
+	return do_execve(name, argv, envp, &nacc_attempt);
 }
 
 SYSCALL_DEFINE5(execveat,
@@ -2159,9 +2195,12 @@ SYSCALL_DEFINE5(execveat,
 		const char __user *const __user *, envp,
 		int, flags)
 {
-	return do_execveat(fd,
-			   getname_uflags(filename, flags),
-			   argv, envp, flags);
+	struct nacc_exec_attempt nacc_attempt = {};
+	struct filename *name;
+
+	nacc_exec_attempt_begin(&nacc_attempt);
+	name = getname_uflags(filename, flags);
+	return do_execveat(fd, name, argv, envp, flags, &nacc_attempt);
 }
 
 #ifdef CONFIG_COMPAT
@@ -2169,7 +2208,12 @@ COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
 	const compat_uptr_t __user *, argv,
 	const compat_uptr_t __user *, envp)
 {
-	return compat_do_execve(getname(filename), argv, envp);
+	struct nacc_exec_attempt nacc_attempt = {};
+	struct filename *name;
+
+	nacc_exec_attempt_begin(&nacc_attempt);
+	name = getname(filename);
+	return compat_do_execve(name, argv, envp, &nacc_attempt);
 }
 
 COMPAT_SYSCALL_DEFINE5(execveat, int, fd,
@@ -2178,9 +2222,13 @@ COMPAT_SYSCALL_DEFINE5(execveat, int, fd,
 		       const compat_uptr_t __user *, envp,
 		       int,  flags)
 {
-	return compat_do_execveat(fd,
-				  getname_uflags(filename, flags),
-				  argv, envp, flags);
+	struct nacc_exec_attempt nacc_attempt = {};
+	struct filename *name;
+
+	nacc_exec_attempt_begin(&nacc_attempt);
+	name = getname_uflags(filename, flags);
+	return compat_do_execveat(fd, name, argv, envp, flags,
+				  &nacc_attempt);
 }
 #endif
 

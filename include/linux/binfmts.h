@@ -9,6 +9,7 @@
 
 struct filename;
 struct coredump_params;
+struct nacc_exec_attempt;
 
 #define CORENAME_MAX_SIZE 128
 
@@ -58,6 +59,7 @@ struct linux_binprm {
 	unsigned interp_flags;
 	int execfd;		/* File descriptor of the executable */
 	unsigned long loader, exec;
+	struct nacc_exec_attempt *nacc_exec_attempt;
 
 	struct rlimit rlim_stack; /* Saved RLIMIT_STACK used during exec. */
 

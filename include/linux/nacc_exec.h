@@ -6,38 +6,62 @@
 #include <linux/types.h>
 
 struct file;
+struct nacc_prepare_object;
+
+struct nacc_exec_attempt {
+	struct nacc_prepare_object *prepare;
+	u64 prepare_generation;
+	bool captured;
+};
 
 #ifdef CONFIG_NACC
-int nacc_exec_commit_current(void);
-int nacc_exec_prepare_elf_current(struct file *executable,
-				  bool fixed_executable, bool direct_executable,
-				  bool has_interpreter,
-				  u32 load_segment_count,
-				  u32 executable_load_segment_count,
-				  u32 executable_flags,
-				  u64 executable_file_offset,
-				  u64 executable_virtual_address,
-				  u64 executable_file_size,
-				  u64 executable_memory_size, u64 entry);
-bool nacc_exec_abort_current(void);
-void nacc_exec_bind_mm_current(void);
-void nacc_exec_activate_current(void);
+void nacc_exec_attempt_begin(struct nacc_exec_attempt *attempt);
+void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt);
+int nacc_exec_commit(const struct nacc_exec_attempt *attempt);
+int nacc_exec_prepare_elf(const struct nacc_exec_attempt *attempt,
+			  struct file *executable,
+			  bool fixed_executable, bool direct_executable,
+			  bool has_interpreter, u32 load_segment_count,
+			  u32 executable_load_segment_count,
+			  u32 executable_flags, u64 executable_file_offset,
+			  u64 executable_virtual_address,
+			  u64 executable_file_size,
+			  u64 executable_memory_size, u64 entry);
+bool nacc_exec_abort(const struct nacc_exec_attempt *attempt);
+void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt);
+void nacc_exec_activate(const struct nacc_exec_attempt *attempt);
 bool nacc_exec_is_active_current(void);
-void nacc_exec_record_failure_current(int failure_errno);
+void nacc_exec_record_failure(const struct nacc_exec_attempt *attempt,
+			      int failure_errno);
 void nacc_exec_exit_current(void);
 #else
-static inline int nacc_exec_commit_current(void)
+static inline void nacc_exec_attempt_begin(struct nacc_exec_attempt *attempt)
 {
+	attempt->prepare = NULL;
+	attempt->prepare_generation = 0;
+	attempt->captured = true;
+}
+
+static inline void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt)
+{
+	attempt->captured = false;
+}
+
+static inline int nacc_exec_commit(const struct nacc_exec_attempt *attempt)
+{
+	(void)attempt;
 	return 0;
 }
 
-static inline int nacc_exec_prepare_elf_current(
-	struct file *executable, bool fixed_executable, bool direct_executable,
+static inline int nacc_exec_prepare_elf(
+	const struct nacc_exec_attempt *attempt, struct file *executable,
+	bool fixed_executable, bool direct_executable,
 	bool has_interpreter, u32 load_segment_count,
 	u32 executable_load_segment_count, u32 executable_flags,
 	u64 executable_file_offset, u64 executable_virtual_address,
 	u64 executable_file_size, u64 executable_memory_size, u64 entry)
 {
+	(void)attempt;
 	(void)executable;
 	(void)fixed_executable;
 	(void)direct_executable;
@@ -53,17 +77,20 @@ static inline int nacc_exec_prepare_elf_current(
 	return 0;
 }
 
-static inline bool nacc_exec_abort_current(void)
+static inline bool nacc_exec_abort(const struct nacc_exec_attempt *attempt)
 {
+	(void)attempt;
 	return false;
 }
 
-static inline void nacc_exec_bind_mm_current(void)
+static inline void nacc_exec_bind_mm(const struct nacc_exec_attempt *attempt)
 {
+	(void)attempt;
 }
 
-static inline void nacc_exec_activate_current(void)
+static inline void nacc_exec_activate(const struct nacc_exec_attempt *attempt)
 {
+	(void)attempt;
 }
 
 static inline bool nacc_exec_is_active_current(void)
@@ -71,8 +98,10 @@ static inline bool nacc_exec_is_active_current(void)
 	return false;
 }
 
-static inline void nacc_exec_record_failure_current(int failure_errno)
+static inline void nacc_exec_record_failure(
+	const struct nacc_exec_attempt *attempt, int failure_errno)
 {
+	(void)attempt;
 	(void)failure_errno;
 }
 

@@ -1012,8 +1012,8 @@ out_free_interp:
 		nacc_executable_load = *elf_ppnt;
 	}
 	/* bprm_change_interp() 会替换 interp 指针，据此拒绝所有 binfmt rewrite。 */
-	retval = nacc_exec_prepare_elf_current(
-		bprm->file, elf_ex->e_type == ET_EXEC,
+	retval = nacc_exec_prepare_elf(
+		bprm->nacc_exec_attempt, bprm->file, elf_ex->e_type == ET_EXEC,
 		bprm->interp == bprm->filename, interpreter != NULL,
 		nacc_load_segment_count, nacc_executable_load_segment_count,
 		nacc_executable_load.p_flags, nacc_executable_load.p_offset,
