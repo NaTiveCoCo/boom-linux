@@ -181,6 +181,8 @@ int main(void)
 			"code and stack physical pages must be distinct");
 	request = valid_request(code, sizeof(code));
 	request.mmap_physical_address = request.stack_physical_address;
+	request.mmap_physical_address_1 = request.mmap_physical_address +
+		NACC_ENTER_PAGE_SIZE;
 	report_contract(nacc_enter_message_build(mailbox, sizeof(mailbox),
 						 &request) == -EINVAL,
 			"mmap reservation must be physically distinct");
