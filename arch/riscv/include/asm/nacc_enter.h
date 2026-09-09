@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Linux -> AS runtime 最小 ENTER mailbox ABI 与纯消息构造器。
- * wire format 必须与 Agent runtime 的 nacc_abi.h v1.4 保持一致。
+ * wire format 必须与 Agent runtime 的 nacc_abi.h v1.5 保持一致。
  */
 #ifndef _ASM_RISCV_NACC_ENTER_H
 #define _ASM_RISCV_NACC_ENTER_H
@@ -21,16 +21,18 @@
 #define NACC_ENTER_STACK_VIRTUAL_ADDRESS 0x00020000ULL
 #define NACC_ENTER_STACK_POINTER 0x00021000ULL
 #define NACC_ENTER_MMAP_VIRTUAL_ADDRESS 0x00030000ULL
-#define NACC_ENTER_MAX_CODE_PREFIX 3792U
+#define NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT 2ULL
+#define NACC_ENTER_MAX_CODE_PREFIX 3776U
 
 #define NACC_RUNTIME_MAILBOX_MAGIC 0x4e4143434d424f58ULL
 #define NACC_RUNTIME_ABI_MAJOR 1U
-#define NACC_RUNTIME_ABI_MINOR 4U
+#define NACC_RUNTIME_ABI_MINOR 5U
 #define NACC_RUNTIME_FEATURE_BASE (1ULL << 0)
 #define NACC_RUNTIME_FEATURE_SERVICE_GENERATION (1ULL << 1)
 #define NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION (1ULL << 5)
 #define NACC_RUNTIME_FEATURE_LIFECYCLE_CREATE_ATTACH (1ULL << 6)
 #define NACC_RUNTIME_FEATURE_ENTER_MMAP_RESERVE (1ULL << 7)
+#define NACC_RUNTIME_FEATURE_ENTER_MMAP_TWO_PAGE (1ULL << 8)
 #define NACC_RUNTIME_ENTER_OPCODE 0x0040U
 #define NACC_RUNTIME_MAILBOX_FLAG_REQUEST (1U << 0)
 #define NACC_RUNTIME_MAILBOX_FLAG_RESPONSE (1U << 1)
@@ -92,6 +94,9 @@ struct nacc_runtime_enter_payload {
 	nacc_enter_u64 reserved[NACC_RUNTIME_RESERVED_WORDS];
 	/* v1.4：固定一页 anonymous mmap reservation 的 physical identity。 */
 	nacc_enter_u64 mmap_physical_address;
+	/* v1.5：固定两页 reservation，并显式绑定第二页 physical identity。 */
+	nacc_enter_u64 mmap_reservation_page_count;
+	nacc_enter_u64 mmap_physical_address_1;
 };
 
 struct nacc_enter_message_request {
@@ -102,6 +107,8 @@ struct nacc_enter_message_request {
 	nacc_enter_u64 code_physical_address;
 	nacc_enter_u64 stack_physical_address;
 	nacc_enter_u64 mmap_physical_address;
+	nacc_enter_u64 mmap_reservation_page_count;
+	nacc_enter_u64 mmap_physical_address_1;
 	nacc_enter_u64 entry_offset;
 	nacc_enter_u64 sequence;
 	nacc_enter_u64 agent_handle;
@@ -139,8 +146,17 @@ _Static_assert(sizeof(struct nacc_runtime_mailbox_descriptor) == 168,
 _Static_assert(offsetof(struct nacc_runtime_mailbox_descriptor,
 			payload_offset) == 120,
 		       "NACC runtime payload offset layout changed");
-_Static_assert(sizeof(struct nacc_runtime_enter_payload) == 136,
+_Static_assert(sizeof(struct nacc_runtime_enter_payload) == 152,
 		       "NACC runtime ENTER payload layout changed");
+_Static_assert(offsetof(struct nacc_runtime_enter_payload,
+			mmap_physical_address) == 128,
+		       "NACC runtime ENTER mmap PFN0 layout changed");
+_Static_assert(offsetof(struct nacc_runtime_enter_payload,
+			mmap_reservation_page_count) == 136,
+		       "NACC runtime ENTER mmap reservation count layout changed");
+_Static_assert(offsetof(struct nacc_runtime_enter_payload,
+			mmap_physical_address_1) == 144,
+		       "NACC runtime ENTER mmap PFN1 layout changed");
 _Static_assert(sizeof(struct nacc_runtime_mailbox_descriptor) +
 		       sizeof(struct nacc_runtime_enter_payload) +
 		       NACC_ENTER_MAX_CODE_PREFIX == NACC_ENTER_MAILBOX_SIZE,

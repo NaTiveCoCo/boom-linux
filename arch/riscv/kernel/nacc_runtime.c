@@ -85,6 +85,7 @@ struct nacc_linux_runtime_enter_owner {
 	u64 live_satp;
 	u64 mailbox_virtual_address;
 	u64 mmap_active;
+	unsigned long mmap_length;
 	struct vm_area_struct *mmap_vma;
 	vm_flags_t mmap_vm_flags;
 	u64 next_munmap_generation;
@@ -425,20 +426,23 @@ static long nacc_linux_runtime_write_bounce(
 	return ret;
 }
 
-static long nacc_linux_runtime_mmap_one_page(
+static long nacc_linux_runtime_mmap_exact(
 	const struct nacc_linux_runtime_enter_owner *owner)
 {
 	struct vm_area_struct *vma;
+	unsigned long length;
 	unsigned long result;
 
 	if (owner->syscall.arguments[0] ||
-	    owner->syscall.arguments[1] != PAGE_SIZE ||
+	    (owner->syscall.arguments[1] != PAGE_SIZE &&
+	     owner->syscall.arguments[1] != 2 * PAGE_SIZE) ||
 	    owner->syscall.arguments[2] != (PROT_READ | PROT_WRITE) ||
 	    owner->syscall.arguments[3] != (MAP_PRIVATE | MAP_ANONYMOUS) ||
 	    owner->syscall.arguments[4] != ULONG_MAX ||
 	    owner->syscall.arguments[5])
 		return -EINVAL;
-	result = vm_mmap(NULL, NACC_ENTER_MMAP_VIRTUAL_ADDRESS, PAGE_SIZE,
+	length = owner->syscall.arguments[1];
+	result = vm_mmap(NULL, NACC_ENTER_MMAP_VIRTUAL_ADDRESS, length,
 			 PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, 0);
 	if (IS_ERR_VALUE(result))
@@ -446,6 +450,7 @@ static long nacc_linux_runtime_mmap_one_page(
 	if (result != NACC_ENTER_MMAP_VIRTUAL_ADDRESS)
 		panic("NACC mmap returned unexpected fixed address");
 	if (nacc_linux_runtime_enter_owner.mmap_active ||
+	    nacc_linux_runtime_enter_owner.mmap_length ||
 	    nacc_linux_runtime_enter_owner.mmap_vma ||
 	    nacc_linux_runtime_enter_owner.munmap.state !=
 		    NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
@@ -455,7 +460,7 @@ static long nacc_linux_runtime_mmap_one_page(
 	mmap_write_lock(current->mm);
 	vma = find_vma(current->mm, NACC_ENTER_MMAP_VIRTUAL_ADDRESS);
 	if (!vma || vma->vm_start != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
-	    vma->vm_end != NACC_ENTER_MMAP_VIRTUAL_ADDRESS + PAGE_SIZE ||
+	    vma->vm_end != NACC_ENTER_MMAP_VIRTUAL_ADDRESS + length ||
 	    vma->vm_file || vma->vm_ops || !vma_is_anonymous(vma) ||
 	    userfaultfd_armed(vma) ||
 	    vma->vm_flags & (VM_SHARED | VM_EXEC | VM_SPECIAL | VM_HUGETLB |
@@ -464,6 +469,7 @@ static long nacc_linux_runtime_mmap_one_page(
 		panic("NACC mmap dedicated VMA invariant failed");
 	nacc_linux_runtime_enter_owner.mmap_vma = vma;
 	nacc_linux_runtime_enter_owner.mmap_vm_flags = vma->vm_flags;
+	nacc_linux_runtime_enter_owner.mmap_length = length;
 	nacc_linux_runtime_enter_owner.mmap_active = 1;
 	mmap_write_unlock(current->mm);
 	return (long)result;
@@ -475,7 +481,8 @@ static bool nacc_linux_runtime_munmap_vma_is_exact(
 {
 	return vma && vma == owner->mmap_vma &&
 		vma->vm_start == NACC_ENTER_MMAP_VIRTUAL_ADDRESS &&
-		vma->vm_end == NACC_ENTER_MMAP_VIRTUAL_ADDRESS + PAGE_SIZE &&
+		vma->vm_end == NACC_ENTER_MMAP_VIRTUAL_ADDRESS +
+			owner->mmap_length &&
 		vma->vm_flags == owner->mmap_vm_flags && !vma->vm_file &&
 		!vma->vm_ops && vma_is_anonymous(vma) &&
 		!userfaultfd_armed(vma);
@@ -488,7 +495,10 @@ static void nacc_linux_runtime_munmap_require_owner(
 	    num_online_cpus() != 1 || raw_smp_processor_id() != 0 ||
 	    owner->munmap.mm != current->mm ||
 	    owner->munmap.address != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
-	    owner->munmap.length != PAGE_SIZE || !owner->munmap.generation ||
+	    (owner->mmap_length != PAGE_SIZE &&
+	     owner->mmap_length != 2 * PAGE_SIZE) ||
+	    owner->munmap.length != owner->mmap_length ||
+	    !owner->munmap.generation ||
 	    !owner->mmap_vma || !owner->mmap_vm_flags)
 		panic("NACC munmap owner invariant failed");
 	mmap_assert_write_locked(owner->munmap.mm);
@@ -501,12 +511,14 @@ static long nacc_linux_runtime_munmap_prepare(
 	u64 generation;
 
 	if (owner->syscall.arguments[0] != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
-	    owner->syscall.arguments[1] != PAGE_SIZE ||
+	    owner->syscall.arguments[1] != owner->mmap_length ||
 	    owner->syscall.arguments[2] != NACC_LINUX_RUNTIME_MUNMAP_PREPARE ||
 	    owner->syscall.arguments[3] || owner->syscall.arguments[4] ||
 	    owner->syscall.arguments[5])
 		return -EINVAL;
 	if (!owner->mmap_active ||
+	    (owner->mmap_length != PAGE_SIZE &&
+	     owner->mmap_length != 2 * PAGE_SIZE) ||
 	    owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
 	    owner->munmap.mm || !owner->next_munmap_generation ||
 	    !owner->mmap_vma || !owner->mmap_vm_flags ||
@@ -534,7 +546,7 @@ static long nacc_linux_runtime_munmap_prepare(
 			.generation = generation,
 			.mm = current->mm,
 			.address = NACC_ENTER_MMAP_VIRTUAL_ADDRESS,
-			.length = PAGE_SIZE,
+			.length = owner->mmap_length,
 		};
 	return (long)generation;
 }
@@ -590,6 +602,7 @@ static long nacc_linux_runtime_munmap_continue(
 		    !owner->mmap_active)
 			panic("NACC munmap finish state invariant failed");
 		nacc_linux_runtime_enter_owner.mmap_active = 0;
+		nacc_linux_runtime_enter_owner.mmap_length = 0;
 		nacc_linux_runtime_enter_owner.mmap_vma = NULL;
 		nacc_linux_runtime_enter_owner.mmap_vm_flags = 0;
 		mmap_write_unlock(owner->munmap.mm);
@@ -600,7 +613,7 @@ static long nacc_linux_runtime_munmap_continue(
 	panic("NACC munmap continuation stage invariant failed");
 }
 
-static long nacc_linux_runtime_munmap_one_page(
+static long nacc_linux_runtime_munmap_exact(
 	const struct nacc_linux_runtime_enter_owner *owner)
 {
 	if (owner->syscall.arguments[2] ==
@@ -634,9 +647,9 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 	else if (owner.syscall.number == __NR_getpid)
 		result = task_tgid_vnr(current);
 	else if (owner.syscall.number == __NR_mmap)
-		result = nacc_linux_runtime_mmap_one_page(&owner);
+		result = nacc_linux_runtime_mmap_exact(&owner);
 	else if (owner.syscall.number == __NR_munmap)
-		result = nacc_linux_runtime_munmap_one_page(&owner);
+		result = nacc_linux_runtime_munmap_exact(&owner);
 	else
 		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();

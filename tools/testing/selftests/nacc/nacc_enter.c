@@ -29,6 +29,9 @@ static struct nacc_enter_message_request valid_request(const uint8_t *code,
 		.code_physical_address = UINT64_C(0x7001c000),
 		.stack_physical_address = UINT64_C(0x7001d000),
 		.mmap_physical_address = UINT64_C(0x7001e000),
+		.mmap_reservation_page_count =
+			NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT,
+		.mmap_physical_address_1 = UINT64_C(0x7001f000),
 		.entry_offset = 0,
 		.sequence = 1,
 		.agent_handle = 2,
@@ -63,7 +66,7 @@ int main(void)
 	size_t elf_prefix_length = 0;
 	int ret;
 
-	printf("TAP version 13\n1..25\n");
+	printf("TAP version 13\n1..27\n");
 	ret = nacc_enter_elf_metadata_validate(&elf, &elf_entry_offset,
 					       &elf_prefix_length);
 	report_contract(!ret && elf_entry_offset == 0xe8 &&
@@ -116,7 +119,8 @@ int main(void)
 				(NACC_RUNTIME_FEATURE_BASE |
 				 NACC_RUNTIME_FEATURE_SERVICE_GENERATION |
 				 NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION |
-				 NACC_RUNTIME_FEATURE_ENTER_MMAP_RESERVE) &&
+				 NACC_RUNTIME_FEATURE_ENTER_MMAP_RESERVE |
+				 NACC_RUNTIME_FEATURE_ENTER_MMAP_TWO_PAGE) &&
 			!descriptor->service_handle &&
 			!descriptor->object_generation,
 			"builder requests AS-owned service allocation");
@@ -136,8 +140,12 @@ int main(void)
 			payload->stack_pointer == NACC_ENTER_STACK_POINTER,
 			"payload fixes the minimal code and stack virtual layout");
 	report_contract(payload->mmap_physical_address ==
-			request.mmap_physical_address,
-			"payload identifies the fixed mmap reservation page");
+			request.mmap_physical_address &&
+			payload->mmap_reservation_page_count ==
+				NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT &&
+			payload->mmap_physical_address_1 ==
+				request.mmap_physical_address_1,
+			"payload identifies both fixed mmap reservation pages");
 	report_contract(!memcmp((uint8_t *)payload + sizeof(*payload), code,
 				request.code_prefix_length),
 			"builder copies the exact code prefix");
@@ -176,6 +184,16 @@ int main(void)
 	report_contract(nacc_enter_message_build(mailbox, sizeof(mailbox),
 						 &request) == -EINVAL,
 			"mmap reservation must be physically distinct");
+	request = valid_request(code, sizeof(code));
+	request.mmap_reservation_page_count = 1;
+	report_contract(nacc_enter_message_build(mailbox, sizeof(mailbox),
+						 &request) == -EINVAL,
+			"mmap reservation must contain exactly two pages");
+	request = valid_request(code, sizeof(code));
+	request.mmap_physical_address_1 += NACC_ENTER_PAGE_SIZE;
+	report_contract(nacc_enter_message_build(mailbox, sizeof(mailbox),
+						 &request) == -EINVAL,
+			"mmap reservation pages must be physically contiguous");
 	request = valid_request(code, sizeof(code));
 	report_contract(nacc_enter_message_build(mailbox, sizeof(mailbox) - 1,
 						 &request) == -EINVAL,

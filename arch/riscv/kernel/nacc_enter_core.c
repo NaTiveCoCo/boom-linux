@@ -96,10 +96,17 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 	if ((request->pool_base | request->pool_size |
 	     request->live_root_physical_address |
 	     request->code_physical_address | request->stack_physical_address |
-	     request->mmap_physical_address) &
+	     request->mmap_physical_address |
+	     request->mmap_physical_address_1) &
 	    (NACC_ENTER_PAGE_SIZE - 1))
 		return -EINVAL;
-	if (!nacc_enter_range_fits(request->pool_base, request->pool_size,
+	if (request->mmap_reservation_page_count !=
+		NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT ||
+	    request->mmap_physical_address >
+		~(nacc_enter_u64)0 - NACC_ENTER_PAGE_SIZE ||
+	    request->mmap_physical_address_1 !=
+		request->mmap_physical_address + NACC_ENTER_PAGE_SIZE ||
+	    !nacc_enter_range_fits(request->pool_base, request->pool_size,
 				   request->live_root_physical_address,
 				   ptp_size) ||
 	    !nacc_enter_range_fits(request->pool_base, request->pool_size,
@@ -110,7 +117,8 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 				   NACC_ENTER_PAGE_SIZE) ||
 	    !nacc_enter_range_fits(request->pool_base, request->pool_size,
 				   request->mmap_physical_address,
-				   NACC_ENTER_PAGE_SIZE) ||
+				   NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT *
+					NACC_ENTER_PAGE_SIZE) ||
 	    request->code_physical_address - request->pool_base <
 		request->live_root_physical_address - request->pool_base +
 			ptp_size ||
@@ -122,7 +130,9 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 			ptp_size ||
 	    request->code_physical_address == request->stack_physical_address ||
 	    request->code_physical_address == request->mmap_physical_address ||
-	    request->stack_physical_address == request->mmap_physical_address)
+	    request->stack_physical_address == request->mmap_physical_address ||
+	    request->code_physical_address == request->mmap_physical_address_1 ||
+	    request->stack_physical_address == request->mmap_physical_address_1)
 		return -EINVAL;
 
 	memset(mailbox, 0, mailbox_size);
@@ -136,7 +146,8 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 	descriptor->header.features = NACC_RUNTIME_FEATURE_BASE |
 		NACC_RUNTIME_FEATURE_SERVICE_GENERATION |
 		NACC_RUNTIME_FEATURE_SERVICE_ALLOCATION |
-		NACC_RUNTIME_FEATURE_ENTER_MMAP_RESERVE;
+		NACC_RUNTIME_FEATURE_ENTER_MMAP_RESERVE |
+		NACC_RUNTIME_FEATURE_ENTER_MMAP_TWO_PAGE;
 	descriptor->opcode = NACC_RUNTIME_ENTER_OPCODE;
 	descriptor->flags = NACC_RUNTIME_MAILBOX_FLAG_REQUEST;
 	descriptor->sequence = request->sequence;
@@ -159,6 +170,9 @@ int nacc_enter_message_build(void *mailbox, size_t mailbox_size,
 	payload->code_prefix_length = request->code_prefix_length;
 	payload->page_size = NACC_ENTER_PAGE_SIZE;
 	payload->mmap_physical_address = request->mmap_physical_address;
+	payload->mmap_reservation_page_count =
+		request->mmap_reservation_page_count;
+	payload->mmap_physical_address_1 = request->mmap_physical_address_1;
 	memcpy(code, request->code_prefix, request->code_prefix_length);
 	return 0;
 }

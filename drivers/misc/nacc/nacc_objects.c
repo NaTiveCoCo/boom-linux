@@ -434,7 +434,7 @@ void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt)
 static int nacc_prepare_build_minimal_live_root(
 	struct nacc_prepare_object *prepare)
 {
-	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1, 1 };
+	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1, 2 };
 	const struct nacc_live_root_layout_request request = {
 		.ptp_page_count = NACC_LIVE_ROOT_FIRST_AU_PTP_PAGES,
 		.payload_page_counts = payload_page_counts,
@@ -457,7 +457,7 @@ static int nacc_prepare_build_minimal_live_root(
 		},
 		{
 			.virtual_base = NACC_ENTER_MMAP_VIRTUAL_ADDRESS,
-			.page_count = 1,
+			.page_count = 2,
 			.permissions = NACC_ROOT_PTE_READ |
 				       NACC_ROOT_PTE_WRITE |
 				       NACC_ROOT_PTE_USER,
@@ -885,6 +885,10 @@ void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
 		.code_physical_address = layout->payload_bases[0],
 		.stack_physical_address = layout->payload_bases[1],
 		.mmap_physical_address = layout->payload_bases[2],
+		.mmap_reservation_page_count =
+			NACC_ENTER_MMAP_RESERVATION_PAGE_COUNT,
+		.mmap_physical_address_1 =
+			layout->payload_bases[2] + NACC_ENTER_PAGE_SIZE,
 		.entry_offset = prepare->elf_entry_offset,
 		.agent_handle = prepare->agent->runtime_ref.handle,
 		.mm_handle = prepare->runtime_mm_ref.handle,
