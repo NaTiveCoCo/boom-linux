@@ -29,7 +29,7 @@
 
 #include "nacc_internal.h"
 
-#define NACC_MINIMAL_PAYLOAD_MAPPINGS 2U
+#define NACC_MINIMAL_PAYLOAD_MAPPINGS 3U
 
 struct nacc_agent_object {
 	struct kref reference;
@@ -434,7 +434,7 @@ void nacc_exec_attempt_release(struct nacc_exec_attempt *attempt)
 static int nacc_prepare_build_minimal_live_root(
 	struct nacc_prepare_object *prepare)
 {
-	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1 };
+	const nacc_bootstrap_u64 payload_page_counts[] = { 1, 1, 1 };
 	const struct nacc_live_root_layout_request request = {
 		.ptp_page_count = NACC_LIVE_ROOT_FIRST_AU_PTP_PAGES,
 		.payload_page_counts = payload_page_counts,
@@ -450,6 +450,13 @@ static int nacc_prepare_build_minimal_live_root(
 		},
 		{
 			.virtual_base = NACC_ENTER_STACK_VIRTUAL_ADDRESS,
+			.page_count = 1,
+			.permissions = NACC_ROOT_PTE_READ |
+				       NACC_ROOT_PTE_WRITE |
+				       NACC_ROOT_PTE_USER,
+		},
+		{
+			.virtual_base = NACC_ENTER_MMAP_VIRTUAL_ADDRESS,
 			.page_count = 1,
 			.permissions = NACC_ROOT_PTE_READ |
 				       NACC_ROOT_PTE_WRITE |
@@ -877,6 +884,7 @@ void nacc_exec_enter(const struct nacc_exec_attempt *attempt,
 		.ptp_page_count = root->lower_ptp_count + 1,
 		.code_physical_address = layout->payload_bases[0],
 		.stack_physical_address = layout->payload_bases[1],
+		.mmap_physical_address = layout->payload_bases[2],
 		.entry_offset = prepare->elf_entry_offset,
 		.agent_handle = prepare->agent->runtime_ref.handle,
 		.mm_handle = prepare->runtime_mm_ref.handle,

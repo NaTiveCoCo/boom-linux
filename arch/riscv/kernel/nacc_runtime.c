@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/mman.h>
 #include <linux/mutex.h>
 #include <linux/sched/task_stack.h>
 #include <linux/string.h>
@@ -388,6 +389,28 @@ static long nacc_linux_runtime_write_bounce(
 	return ret;
 }
 
+static long nacc_linux_runtime_mmap_one_page(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	unsigned long result;
+
+	if (owner->syscall.arguments[0] ||
+	    owner->syscall.arguments[1] != PAGE_SIZE ||
+	    owner->syscall.arguments[2] != (PROT_READ | PROT_WRITE) ||
+	    owner->syscall.arguments[3] != (MAP_PRIVATE | MAP_ANONYMOUS) ||
+	    owner->syscall.arguments[4] != ULONG_MAX ||
+	    owner->syscall.arguments[5])
+		return -EINVAL;
+	result = vm_mmap(NULL, NACC_ENTER_MMAP_VIRTUAL_ADDRESS, PAGE_SIZE,
+			 PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, 0);
+	if (IS_ERR_VALUE(result))
+		return (long)result;
+	if (result != NACC_ENTER_MMAP_VIRTUAL_ADDRESS)
+		panic("NACC mmap returned unexpected fixed address");
+	return (long)result;
+}
+
 asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 {
 	struct nacc_linux_runtime_enter_owner owner =
@@ -409,9 +432,8 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 		result = nacc_linux_runtime_write_bounce(&owner);
 	else if (owner.syscall.number == __NR_getpid)
 		result = task_tgid_vnr(current);
-	/* live mapping transaction 接通前不得返回只有 shadow VMA 的假成功。 */
 	else if (owner.syscall.number == __NR_mmap)
-		result = -EOPNOTSUPP;
+		result = nacc_linux_runtime_mmap_one_page(&owner);
 	else
 		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();
