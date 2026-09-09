@@ -15,6 +15,7 @@
 #include <linux/mutex.h>
 #include <linux/sched/task_stack.h>
 #include <linux/string.h>
+#include <linux/userfaultfd_k.h>
 
 #include <asm/csr.h>
 #include <asm/nacc_bootstrap.h>
@@ -52,6 +53,27 @@ struct nacc_linux_runtime_syscall_owner {
 	u64 as_epc;
 };
 
+enum nacc_linux_runtime_munmap_state {
+	NACC_LINUX_RUNTIME_MUNMAP_IDLE = 0,
+	NACC_LINUX_RUNTIME_MUNMAP_PREPARED,
+	NACC_LINUX_RUNTIME_MUNMAP_REMOVED,
+};
+
+enum nacc_linux_runtime_munmap_stage {
+	NACC_LINUX_RUNTIME_MUNMAP_PREPARE = 0,
+	NACC_LINUX_RUNTIME_MUNMAP_COMMIT = 1,
+	NACC_LINUX_RUNTIME_MUNMAP_ABORT = 2,
+	NACC_LINUX_RUNTIME_MUNMAP_FINISH = 3,
+};
+
+struct nacc_linux_runtime_munmap_owner {
+	u64 state;
+	u64 generation;
+	struct mm_struct *mm;
+	unsigned long address;
+	unsigned long length;
+};
+
 struct nacc_linux_runtime_enter_owner {
 	struct task_struct *task;
 	u64 sequence;
@@ -59,6 +81,11 @@ struct nacc_linux_runtime_enter_owner {
 	u64 control_satp;
 	u64 live_satp;
 	u64 mailbox_virtual_address;
+	u64 mmap_active;
+	struct vm_area_struct *mmap_vma;
+	vm_flags_t mmap_vm_flags;
+	u64 next_munmap_generation;
+	struct nacc_linux_runtime_munmap_owner munmap;
 	struct nacc_linux_runtime_syscall_owner syscall;
 };
 
@@ -300,6 +327,7 @@ void __noreturn nacc_linux_runtime_exec_enter(
 		.live_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
 			(active_request.live_root_physical_address >> PAGE_SHIFT),
 		.mailbox_virtual_address = descriptor->mailbox_virtual_base,
+		.next_munmap_generation = 1,
 	};
 	/* IRQ-disabled owner snapshot 必须先于 Agent ENTER 可见。 */
 	mb();
@@ -344,7 +372,8 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 	case __NR_mmap:
 		break;
 	case __NR_munmap:
-		if (regs->a3 || regs->a4 || regs->a5 || regs->a6)
+		if (regs->a3 > NACC_LINUX_RUNTIME_MUNMAP_FINISH ||
+		    regs->a5 || regs->a6)
 			panic("NACC AS munmap syscall invariant failed");
 		break;
 	default:
@@ -396,6 +425,7 @@ static long nacc_linux_runtime_write_bounce(
 static long nacc_linux_runtime_mmap_one_page(
 	const struct nacc_linux_runtime_enter_owner *owner)
 {
+	struct vm_area_struct *vma;
 	unsigned long result;
 
 	if (owner->syscall.arguments[0] ||
@@ -412,7 +442,164 @@ static long nacc_linux_runtime_mmap_one_page(
 		return (long)result;
 	if (result != NACC_ENTER_MMAP_VIRTUAL_ADDRESS)
 		panic("NACC mmap returned unexpected fixed address");
+	if (nacc_linux_runtime_enter_owner.mmap_active ||
+	    nacc_linux_runtime_enter_owner.mmap_vma ||
+	    nacc_linux_runtime_enter_owner.munmap.state !=
+		    NACC_LINUX_RUNTIME_MUNMAP_IDLE)
+		panic("NACC mmap publication invariant failed");
+	mmap_write_lock(current->mm);
+	vma = find_vma(current->mm, NACC_ENTER_MMAP_VIRTUAL_ADDRESS);
+	if (!vma || vma->vm_start != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
+	    vma->vm_end != NACC_ENTER_MMAP_VIRTUAL_ADDRESS + PAGE_SIZE ||
+	    vma->vm_file || vma->vm_ops || !vma_is_anonymous(vma) ||
+	    userfaultfd_armed(vma) ||
+	    vma->vm_flags & (VM_SHARED | VM_EXEC | VM_SPECIAL | VM_HUGETLB |
+			     VM_LOCKED) ||
+	    (vma->vm_flags & (VM_READ | VM_WRITE)) != (VM_READ | VM_WRITE))
+		panic("NACC mmap dedicated VMA invariant failed");
+	nacc_linux_runtime_enter_owner.mmap_vma = vma;
+	nacc_linux_runtime_enter_owner.mmap_vm_flags = vma->vm_flags;
+	nacc_linux_runtime_enter_owner.mmap_active = 1;
+	mmap_write_unlock(current->mm);
 	return (long)result;
+}
+
+static bool nacc_linux_runtime_munmap_vma_is_exact(
+	const struct nacc_linux_runtime_enter_owner *owner,
+	struct vm_area_struct *vma)
+{
+	return vma && vma == owner->mmap_vma &&
+		vma->vm_start == NACC_ENTER_MMAP_VIRTUAL_ADDRESS &&
+		vma->vm_end == NACC_ENTER_MMAP_VIRTUAL_ADDRESS + PAGE_SIZE &&
+		vma->vm_flags == owner->mmap_vm_flags && !vma->vm_file &&
+		!vma->vm_ops && vma_is_anonymous(vma) &&
+		!userfaultfd_armed(vma);
+}
+
+static void nacc_linux_runtime_munmap_require_owner(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	if (!owner->task || owner->task != current || !current->mm ||
+	    num_online_cpus() != 1 || raw_smp_processor_id() != 0 ||
+	    owner->munmap.mm != current->mm ||
+	    owner->munmap.address != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
+	    owner->munmap.length != PAGE_SIZE || !owner->munmap.generation ||
+	    !owner->mmap_vma || !owner->mmap_vm_flags)
+		panic("NACC munmap owner invariant failed");
+	mmap_assert_write_locked(owner->munmap.mm);
+}
+
+static long nacc_linux_runtime_munmap_prepare(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	struct vm_area_struct *vma;
+	u64 generation;
+
+	if (owner->syscall.arguments[0] != NACC_ENTER_MMAP_VIRTUAL_ADDRESS ||
+	    owner->syscall.arguments[1] != PAGE_SIZE ||
+	    owner->syscall.arguments[2] != NACC_LINUX_RUNTIME_MUNMAP_PREPARE ||
+	    owner->syscall.arguments[3] || owner->syscall.arguments[4] ||
+	    owner->syscall.arguments[5])
+		return -EINVAL;
+	if (!owner->mmap_active ||
+	    owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
+	    owner->munmap.mm || !owner->next_munmap_generation ||
+	    !owner->mmap_vma || !owner->mmap_vm_flags)
+		panic("NACC munmap prepare state invariant failed");
+	if (signal_pending(current))
+		return -EINTR;
+	if (mmap_write_lock_killable(current->mm))
+		return -EINTR;
+	if (signal_pending(current)) {
+		mmap_write_unlock(current->mm);
+		return -EINTR;
+	}
+	vma = find_vma(current->mm, NACC_ENTER_MMAP_VIRTUAL_ADDRESS);
+	if (!nacc_linux_runtime_munmap_vma_is_exact(owner, vma))
+		panic("NACC munmap shadow VMA invariant failed");
+	generation = owner->next_munmap_generation;
+	if (generation > LONG_MAX)
+		panic("NACC munmap generation overflow");
+	nacc_linux_runtime_enter_owner.next_munmap_generation = generation + 1;
+	nacc_linux_runtime_enter_owner.munmap =
+		(struct nacc_linux_runtime_munmap_owner) {
+			.state = NACC_LINUX_RUNTIME_MUNMAP_PREPARED,
+			.generation = generation,
+			.mm = current->mm,
+			.address = NACC_ENTER_MMAP_VIRTUAL_ADDRESS,
+			.length = PAGE_SIZE,
+		};
+	return (long)generation;
+}
+
+static long nacc_linux_runtime_munmap_continue(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	u64 stage = owner->syscall.arguments[2];
+	u64 generation = owner->syscall.arguments[3];
+	int ret;
+
+	if (owner->syscall.arguments[0] != owner->munmap.address ||
+	    owner->syscall.arguments[1] != owner->munmap.length ||
+	    owner->syscall.arguments[4] || owner->syscall.arguments[5] ||
+	    generation != owner->munmap.generation)
+		panic("NACC munmap continuation identity invariant failed");
+	nacc_linux_runtime_munmap_require_owner(owner);
+	if (stage == NACC_LINUX_RUNTIME_MUNMAP_COMMIT) {
+		if (owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_PREPARED)
+			panic("NACC munmap commit state invariant failed");
+		ret = do_munmap(owner->munmap.mm, owner->munmap.address,
+				owner->munmap.length, NULL);
+		if (!ret) {
+			if (find_vma_intersection(owner->munmap.mm,
+					  owner->munmap.address,
+					  owner->munmap.address +
+						  owner->munmap.length))
+				panic("NACC munmap shadow removal invariant failed");
+			nacc_linux_runtime_enter_owner.munmap.state =
+				NACC_LINUX_RUNTIME_MUNMAP_REMOVED;
+		} else if (!nacc_linux_runtime_munmap_vma_is_exact(
+				   owner,
+				   find_vma(owner->munmap.mm,
+					    owner->munmap.address))) {
+			panic("NACC munmap rollback VMA invariant failed");
+		}
+		return ret;
+	}
+	if (stage == NACC_LINUX_RUNTIME_MUNMAP_ABORT) {
+		if (owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_PREPARED)
+			panic("NACC munmap abort state invariant failed");
+		if (!nacc_linux_runtime_munmap_vma_is_exact(
+				owner,
+				find_vma(owner->munmap.mm, owner->munmap.address)))
+			panic("NACC munmap abort VMA invariant failed");
+		mmap_write_unlock(owner->munmap.mm);
+		nacc_linux_runtime_enter_owner.munmap =
+			(struct nacc_linux_runtime_munmap_owner) { 0 };
+		return 0;
+	}
+	if (stage == NACC_LINUX_RUNTIME_MUNMAP_FINISH) {
+		if (owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_REMOVED ||
+		    !owner->mmap_active)
+			panic("NACC munmap finish state invariant failed");
+		nacc_linux_runtime_enter_owner.mmap_active = 0;
+		nacc_linux_runtime_enter_owner.mmap_vma = NULL;
+		nacc_linux_runtime_enter_owner.mmap_vm_flags = 0;
+		mmap_write_unlock(owner->munmap.mm);
+		nacc_linux_runtime_enter_owner.munmap =
+			(struct nacc_linux_runtime_munmap_owner) { 0 };
+		return 0;
+	}
+	panic("NACC munmap continuation stage invariant failed");
+}
+
+static long nacc_linux_runtime_munmap_one_page(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	if (owner->syscall.arguments[2] ==
+	    NACC_LINUX_RUNTIME_MUNMAP_PREPARE)
+		return nacc_linux_runtime_munmap_prepare(owner);
+	return nacc_linux_runtime_munmap_continue(owner);
 }
 
 asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
@@ -428,7 +615,10 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 		panic("NACC syscall continuation invariant failed");
 	local_irq_enable();
 	/* 当前 slice 不得静默绕过 seccomp/audit/ptrace 等未接通 policy。 */
-	if (READ_ONCE(current_thread_info()->syscall_work))
+	if (READ_ONCE(current_thread_info()->syscall_work) &&
+	    !(owner.syscall.number == __NR_munmap &&
+	      owner.syscall.arguments[2] != NACC_LINUX_RUNTIME_MUNMAP_PREPARE &&
+	      owner.munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE))
 		result = -ENOSYS;
 	/* writev 已由 Agent 严格展平为一个 mailbox buffer。 */
 	else if (owner.syscall.number == __NR_write ||
@@ -438,10 +628,8 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 		result = task_tgid_vnr(current);
 	else if (owner.syscall.number == __NR_mmap)
 		result = nacc_linux_runtime_mmap_one_page(&owner);
-	else if (owner.syscall.number == __NR_munmap) {
-		pr_info("NACC Linux munmap transaction is not implemented\n");
-		result = -EOPNOTSUPP;
-	}
+	else if (owner.syscall.number == __NR_munmap)
+		result = nacc_linux_runtime_munmap_one_page(&owner);
 	else
 		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();
@@ -465,7 +653,8 @@ void nacc_linux_runtime_exec_exit_complete(void)
 	if (!irqs_disabled() || !owner.task || owner.task != current ||
 	    !owner.sequence || !owner.linux_satp || !owner.control_satp ||
 	    !owner.live_satp || owner.control_satp == owner.live_satp ||
-	    csr_read(CSR_SATP) != owner.control_satp)
+	    csr_read(CSR_SATP) != owner.control_satp ||
+	    owner.munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE)
 		panic("NACC exec EXIT owner invariant failed");
 	csr_write(CSR_SATP, owner.linux_satp);
 	local_flush_tlb_all();
