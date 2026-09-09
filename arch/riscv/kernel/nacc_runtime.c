@@ -47,9 +47,7 @@ static struct nacc_linux_runtime_call *nacc_linux_runtime_call;
 struct nacc_linux_runtime_syscall_owner {
 	u64 active;
 	u64 number;
-	u64 fd;
-	u64 bounce_buffer;
-	u64 length;
+	u64 arguments[6];
 	u64 as_epc;
 };
 
@@ -327,20 +325,22 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 	/* trap 区只捕获公开参数；可阻塞的 syscall 必须移到 Linux continuation。 */
 	if (!regs || !irqs_disabled() || !owner.task || owner.task != current ||
 	    !owner.sequence || !owner.live_satp || owner.syscall.active ||
-	    csr_read(CSR_SATP) != owner.live_satp || regs->a4 || regs->a5 ||
-	    regs->a6)
+	    csr_read(CSR_SATP) != owner.live_satp)
 		panic("NACC AS syscall invariant failed");
 	switch (regs->a0) {
 	case __NR_write:
 	case __NR_writev:
 		if (regs->a1 != 2 ||
 		    regs->a2 != owner.mailbox_virtual_address || !regs->a3 ||
-		    regs->a3 > PAGE_SIZE)
+		    regs->a3 > PAGE_SIZE || regs->a4 || regs->a5 || regs->a6)
 			panic("NACC AS write/writev syscall invariant failed");
 		break;
 	case __NR_getpid:
-		if (regs->a1 || regs->a2 || regs->a3)
+		if (regs->a1 || regs->a2 || regs->a3 || regs->a4 || regs->a5 ||
+		    regs->a6)
 			panic("NACC AS getpid syscall invariant failed");
+		break;
+	case __NR_mmap:
 		break;
 	default:
 		panic("NACC AS unsupported syscall invariant failed");
@@ -349,9 +349,8 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 		(struct nacc_linux_runtime_syscall_owner) {
 		.active = 1,
 		.number = regs->a0,
-		.fd = regs->a1,
-		.bounce_buffer = regs->a2,
-		.length = regs->a3,
+		.arguments = { regs->a1, regs->a2, regs->a3, regs->a4,
+			       regs->a5, regs->a6 },
 		.as_epc = regs->epc,
 	};
 	mb();
@@ -369,7 +368,7 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 static long nacc_linux_runtime_write_bounce(
 	const struct nacc_linux_runtime_enter_owner *owner)
 {
-	struct fd f = fdget_pos(owner->syscall.fd);
+	struct fd f = fdget_pos(owner->syscall.arguments[0]);
 	loff_t position;
 	loff_t *position_pointer = NULL;
 	ssize_t ret;
@@ -380,8 +379,8 @@ static long nacc_linux_runtime_write_bounce(
 		position = f.file->f_pos;
 		position_pointer = &position;
 	}
-	ret = kernel_write(f.file, (const void *)owner->syscall.bounce_buffer,
-			   owner->syscall.length,
+	ret = kernel_write(f.file, (const void *)owner->syscall.arguments[1],
+			   owner->syscall.arguments[2],
 			   position_pointer);
 	if (ret >= 0 && position_pointer)
 		f.file->f_pos = position;
@@ -410,6 +409,9 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 		result = nacc_linux_runtime_write_bounce(&owner);
 	else if (owner.syscall.number == __NR_getpid)
 		result = task_tgid_vnr(current);
+	/* live mapping transaction 接通前不得返回只有 shadow VMA 的假成功。 */
+	else if (owner.syscall.number == __NR_mmap)
+		result = -EOPNOTSUPP;
 	else
 		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();
