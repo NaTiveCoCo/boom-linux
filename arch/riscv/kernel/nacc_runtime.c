@@ -29,6 +29,9 @@
 #include <asm/tlbflush.h>
 #include <asm/unistd.h>
 
+/* 当前 task 与 nacc_prepare_object 的 mmget() 各持有一个 mm_users。 */
+#define NACC_LINUX_RUNTIME_BOUND_MM_USERS 2
+
 struct nacc_linux_runtime_call {
 	struct completion completion;
 	struct nacc_runtime_lifecycle_request request;
@@ -446,7 +449,8 @@ static long nacc_linux_runtime_mmap_one_page(
 	    nacc_linux_runtime_enter_owner.mmap_vma ||
 	    nacc_linux_runtime_enter_owner.munmap.state !=
 		    NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
-	    atomic_read(&current->mm->mm_users) != 1)
+	    atomic_read(&current->mm->mm_users) !=
+		    NACC_LINUX_RUNTIME_BOUND_MM_USERS)
 		panic("NACC mmap publication invariant failed");
 	mmap_write_lock(current->mm);
 	vma = find_vma(current->mm, NACC_ENTER_MMAP_VIRTUAL_ADDRESS);
@@ -506,7 +510,8 @@ static long nacc_linux_runtime_munmap_prepare(
 	    owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
 	    owner->munmap.mm || !owner->next_munmap_generation ||
 	    !owner->mmap_vma || !owner->mmap_vm_flags ||
-	    atomic_read(&current->mm->mm_users) != 1)
+	    atomic_read(&current->mm->mm_users) !=
+		    NACC_LINUX_RUNTIME_BOUND_MM_USERS)
 		panic("NACC munmap prepare state invariant failed");
 	if (signal_pending(current))
 		return -EINTR;
