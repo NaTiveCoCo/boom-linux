@@ -45,6 +45,7 @@ struct nacc_linux_runtime_enter_owner {
 	struct task_struct *task;
 	u64 sequence;
 	u64 linux_satp;
+	u64 control_satp;
 	u64 live_satp;
 };
 
@@ -253,6 +254,7 @@ void __noreturn nacc_linux_runtime_exec_enter(
 		.task = current,
 		.sequence = active_request.sequence,
 		.linux_satp = csr_read(CSR_SATP),
+		.control_satp = control_satp,
 		.live_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
 			(active_request.live_root_physical_address >> PAGE_SHIFT),
 	};
@@ -279,8 +281,9 @@ void nacc_linux_runtime_exec_exit_complete(void)
 	int ret;
 
 	if (!irqs_disabled() || !owner.task || owner.task != current ||
-	    !owner.sequence || !owner.linux_satp || !owner.live_satp ||
-	    csr_read(CSR_SATP) != owner.live_satp)
+	    !owner.sequence || !owner.linux_satp || !owner.control_satp ||
+	    !owner.live_satp || owner.control_satp == owner.live_satp ||
+	    csr_read(CSR_SATP) != owner.control_satp)
 		panic("NACC exec EXIT owner invariant failed");
 	csr_write(CSR_SATP, owner.linux_satp);
 	local_flush_tlb_all();
