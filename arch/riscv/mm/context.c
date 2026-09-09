@@ -13,6 +13,9 @@
 #include <linux/spinlock.h>
 #include <linux/static_key.h>
 #include <asm/tlbflush.h>
+#ifdef CONFIG_RISCV_NACC
+#include <asm/nacc_runtime.h>
+#endif
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 
@@ -337,8 +340,15 @@ void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 {
 	unsigned int cpu;
 
+#ifdef CONFIG_RISCV_NACC
+	/* syscall continuation 调度期间，同 mm 切换也可能需要离开 live root。 */
+	if (unlikely(prev == next) &&
+	    !nacc_linux_runtime_syscall_is_active())
+		return;
+#else
 	if (unlikely(prev == next))
 		return;
+#endif
 
 	/*
 	 * Mark the current MM context as inactive, and the next as
@@ -348,6 +358,10 @@ void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	cpu = smp_processor_id();
 
 	set_mm(prev, next, cpu);
+
+#ifdef CONFIG_RISCV_NACC
+	nacc_linux_runtime_switch_live_root(task, next);
+#endif
 
 	flush_icache_deferred(next, cpu);
 }

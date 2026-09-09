@@ -2,8 +2,8 @@
 /*
  * NACC AS -> Linux synchronous service entry。
  *
- * BOOTSTRAP_READY 是一次性 AS→Linux handoff；EXIT 是最小 runtime terminal
- * handoff。其他 runtime service 尚未接通。
+ * BOOTSTRAP_READY 是一次性 AS→Linux handoff；SYSCALL 当前只接通有界 write(2)；
+ * EXIT 是最小 runtime terminal handoff。
  */
 
 #include <linux/entry-common.h>
@@ -69,7 +69,7 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 
 	/*
 	 * SPA 在 ret_from_exception 回写前仍是 hart-local live CSR state；当前
-	 * non-blocking stub 不允许在这里调度到另一个 task。
+	 * 同步 service 不允许在这里调度到另一个 task。
 	 */
 	state = irqentry_nmi_enter(regs);
 	regs->epc += NACC_ECALL_INSN_SIZE;
@@ -78,6 +78,9 @@ asmlinkage __visible noinstr void do_trap_ecall_as(struct pt_regs *regs)
 	switch (regs->a7) {
 	case NACC_AS_LINUX_BOOTSTRAP_READY:
 		regs->a0 = nacc_linux_bootstrap_ready(regs);
+		break;
+	case NACC_AS_LINUX_SYSCALL_OPCODE:
+		nacc_linux_runtime_syscall_capture(regs);
 		break;
 	case NACC_AS_LINUX_RUNTIME_RESPONSE_OPCODE:
 		nacc_linux_runtime_response(regs);

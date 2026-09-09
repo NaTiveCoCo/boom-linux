@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Linux → AS lifecycle request 与 terminal response continuation。 */
+/* Linux → AS lifecycle request、同步 syscall 与 terminal continuation。 */
 
 #include <linux/completion.h>
 #include <linux/err.h>
+#include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
 #include <linux/irqflags.h>
@@ -41,15 +43,46 @@ static struct nacc_linux_runtime_session nacc_linux_runtime_session
 static struct task_struct *nacc_linux_runtime_task;
 static struct nacc_linux_runtime_call *nacc_linux_runtime_call;
 
+struct nacc_linux_runtime_syscall_owner {
+	u64 active;
+	u64 number;
+	u64 fd;
+	u64 bounce_buffer;
+	u64 length;
+	u64 as_epc;
+};
+
 struct nacc_linux_runtime_enter_owner {
 	struct task_struct *task;
 	u64 sequence;
 	u64 linux_satp;
 	u64 control_satp;
 	u64 live_satp;
+	u64 mailbox_virtual_address;
+	struct nacc_linux_runtime_syscall_owner syscall;
 };
 
 static struct nacc_linux_runtime_enter_owner nacc_linux_runtime_enter_owner;
+
+bool nacc_linux_runtime_syscall_is_active(void)
+{
+	return READ_ONCE(nacc_linux_runtime_enter_owner.syscall.active) != 0;
+}
+
+bool nacc_linux_runtime_switch_live_root(struct task_struct *task,
+					struct mm_struct *mm)
+{
+	struct nacc_linux_runtime_enter_owner owner =
+		nacc_linux_runtime_enter_owner;
+
+	if (!owner.syscall.active || task != owner.task)
+		return false;
+	if (!task || !mm || task->mm != mm || !owner.live_satp)
+		panic("NACC syscall schedule-in invariant failed");
+	csr_write(CSR_SATP, owner.live_satp);
+	local_flush_tlb_all();
+	return true;
+}
 
 static unsigned long nacc_linux_runtime_stack_top(struct task_struct *task)
 {
@@ -257,6 +290,7 @@ void __noreturn nacc_linux_runtime_exec_enter(
 		.control_satp = control_satp,
 		.live_satp = NACC_LINUX_SESSION_SATP_MODE_SV39 |
 			(active_request.live_root_physical_address >> PAGE_SHIFT),
+		.mailbox_virtual_address = descriptor->mailbox_virtual_base,
 	};
 	/* IRQ-disabled owner snapshot 必须先于 Agent ENTER 可见。 */
 	mb();
@@ -272,6 +306,93 @@ void __noreturn nacc_linux_runtime_exec_enter(
 	current->thread_info.kernel_sp = handoff_sp;
 	nacc_linux_runtime_enter(nacc_linux_runtime_entry_snapshot(),
 				 control_satp);
+}
+
+void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
+{
+	struct nacc_linux_runtime_enter_owner owner =
+		nacc_linux_runtime_enter_owner;
+	unsigned long stack_top;
+
+	/* trap 区只捕获公开参数；可阻塞的 syscall 必须移到 Linux continuation。 */
+	if (!regs || !irqs_disabled() || !owner.task || owner.task != current ||
+	    !owner.sequence || !owner.live_satp || owner.syscall.active ||
+	    csr_read(CSR_SATP) != owner.live_satp || regs->a0 != 64 ||
+	    regs->a1 != 2 || regs->a2 != owner.mailbox_virtual_address ||
+	    !regs->a3 || regs->a3 > PAGE_SIZE || regs->a4 || regs->a5 ||
+	    regs->a6)
+		panic("NACC AS syscall invariant failed");
+	nacc_linux_runtime_enter_owner.syscall =
+		(struct nacc_linux_runtime_syscall_owner) {
+		.active = 1,
+		.number = regs->a0,
+		.fd = regs->a1,
+		.bounce_buffer = regs->a2,
+		.length = regs->a3,
+		.as_epc = regs->epc,
+	};
+	mb();
+	stack_top = nacc_linux_runtime_stack_top(current) -
+		ALIGN(sizeof(struct pt_regs), STACK_ALIGN);
+	current->thread_info.kernel_sp = stack_top;
+	regs->epc = (unsigned long)nacc_linux_runtime_syscall_resume;
+	regs->sp = stack_top;
+	regs->tp = (unsigned long)current;
+	regs->status &= ~(SR_SIE | SR_SPIE | SR_SUM | SR_FS_VS);
+	regs->status |= SR_SPP;
+	regs->asstatus &= ~SR_ASSTATUS_SPA;
+}
+
+static long nacc_linux_runtime_write_bounce(
+	const struct nacc_linux_runtime_enter_owner *owner)
+{
+	struct fd f = fdget_pos(owner->syscall.fd);
+	loff_t position;
+	loff_t *position_pointer = NULL;
+	ssize_t ret;
+
+	if (!f.file)
+		return -EBADF;
+	if (!(f.file->f_mode & FMODE_STREAM)) {
+		position = f.file->f_pos;
+		position_pointer = &position;
+	}
+	ret = kernel_write(f.file, (const void *)owner->syscall.bounce_buffer,
+			   owner->syscall.length,
+			   position_pointer);
+	if (ret >= 0 && position_pointer)
+		f.file->f_pos = position;
+	fdput_pos(f);
+	return ret;
+}
+
+asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
+{
+	struct nacc_linux_runtime_enter_owner owner =
+		nacc_linux_runtime_enter_owner;
+	unsigned long as_epc;
+	long result;
+
+	if (!irqs_disabled() || !owner.task || owner.task != current ||
+	    !owner.syscall.active || csr_read(CSR_SATP) != owner.live_satp ||
+	    (csr_read(CSR_ASSTATUS) & SR_ASSTATUS_SPA))
+		panic("NACC syscall continuation invariant failed");
+	local_irq_enable();
+	/* 当前 slice 不得静默绕过 seccomp/audit/ptrace 等未接通 policy。 */
+	if (READ_ONCE(current_thread_info()->syscall_work))
+		result = -ENOSYS;
+	else
+		result = nacc_linux_runtime_write_bounce(&owner);
+	local_irq_disable();
+	if (!irqs_disabled() || current != owner.task ||
+	    csr_read(CSR_SATP) != owner.live_satp ||
+	    !nacc_linux_runtime_enter_owner.syscall.active)
+		panic("NACC syscall completion invariant failed");
+	as_epc = owner.syscall.as_epc;
+	nacc_linux_runtime_enter_owner.syscall =
+		(struct nacc_linux_runtime_syscall_owner) { 0 };
+	mb();
+	nacc_linux_runtime_syscall_return(result, as_epc);
 }
 
 void nacc_linux_runtime_exec_exit_complete(void)

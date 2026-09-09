@@ -9,8 +9,11 @@
 #include <asm/nacc_runtime_lifecycle.h>
 
 #define NACC_AS_LINUX_RUNTIME_RESPONSE_OPCODE 0x8002U
+#define NACC_AS_LINUX_SYSCALL_OPCODE 0x8001U
 
 struct pt_regs;
+struct mm_struct;
+struct task_struct;
 
 bool nacc_linux_runtime_is_ready(void);
 int nacc_linux_runtime_lifecycle_call(
@@ -19,10 +22,18 @@ int nacc_linux_runtime_lifecycle_call(
 void nacc_linux_runtime_exec_enter(
 	const struct nacc_enter_message_request *request) __noreturn;
 void nacc_linux_runtime_response(struct pt_regs *regs);
+void nacc_linux_runtime_syscall_capture(struct pt_regs *regs);
 asmlinkage void nacc_linux_runtime_enter(unsigned long runtime_entry,
 					 unsigned long control_satp) __noreturn;
 asmlinkage void nacc_linux_runtime_response_resume(void);
 asmlinkage void nacc_linux_runtime_response_complete(void) __noreturn;
+asmlinkage void nacc_linux_runtime_syscall_resume(void);
+asmlinkage void nacc_linux_runtime_syscall_complete(void) __noreturn;
+asmlinkage void nacc_linux_runtime_syscall_return(long result,
+						  unsigned long as_epc) __noreturn;
+bool nacc_linux_runtime_switch_live_root(struct task_struct *task,
+						struct mm_struct *mm);
+bool nacc_linux_runtime_syscall_is_active(void);
 
 asmlinkage void nacc_linux_runtime_exit_resume(void);
 asmlinkage void nacc_linux_runtime_exit_complete(void) __noreturn;
