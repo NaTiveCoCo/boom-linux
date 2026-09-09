@@ -34,6 +34,7 @@ asmlinkage void nacc_linux_runtime_syscall_return(long result,
 bool nacc_linux_runtime_switch_live_root(struct task_struct *task,
 						struct mm_struct *mm);
 bool nacc_linux_runtime_syscall_is_active(void);
+bool nacc_linux_runtime_syscall_live_root_is_current(void);
 
 asmlinkage void nacc_linux_runtime_exit_resume(void);
 asmlinkage void nacc_linux_runtime_exit_complete(void) __noreturn;

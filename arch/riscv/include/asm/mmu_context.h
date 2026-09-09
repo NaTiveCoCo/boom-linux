@@ -23,6 +23,11 @@ static inline void activate_mm(struct mm_struct *prev,
 	switch_mm(prev, next, NULL);
 }
 
+#ifdef CONFIG_RISCV_NACC
+#define enter_lazy_tlb nacc_enter_lazy_tlb
+void nacc_enter_lazy_tlb(struct mm_struct *mm, struct task_struct *task);
+#endif
+
 #define init_new_context init_new_context
 static inline int init_new_context(struct task_struct *tsk,
 			struct mm_struct *mm)

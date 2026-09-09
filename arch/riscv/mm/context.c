@@ -365,3 +365,19 @@ void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 
 	flush_icache_deferred(next, cpu);
 }
+
+#ifdef CONFIG_RISCV_NACC
+void nacc_enter_lazy_tlb(struct mm_struct *mm, struct task_struct *task)
+{
+	unsigned int cpu;
+
+	if (!nacc_linux_runtime_syscall_live_root_is_current())
+		return;
+	if (!mm || !task || task->mm)
+		panic("NACC syscall lazy-TLB invariant failed");
+	cpu = smp_processor_id();
+	/* kernel task 不得继承 confidential owner 的 live root。 */
+	set_mm(mm, mm, cpu);
+	flush_icache_deferred(mm, cpu);
+}
+#endif

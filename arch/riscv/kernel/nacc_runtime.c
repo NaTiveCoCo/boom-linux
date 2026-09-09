@@ -69,6 +69,15 @@ bool nacc_linux_runtime_syscall_is_active(void)
 	return READ_ONCE(nacc_linux_runtime_enter_owner.syscall.active) != 0;
 }
 
+bool nacc_linux_runtime_syscall_live_root_is_current(void)
+{
+	struct nacc_linux_runtime_enter_owner owner =
+		nacc_linux_runtime_enter_owner;
+
+	return owner.syscall.active && owner.live_satp &&
+		csr_read(CSR_SATP) == owner.live_satp;
+}
+
 bool nacc_linux_runtime_switch_live_root(struct task_struct *task,
 					struct mm_struct *mm)
 {
