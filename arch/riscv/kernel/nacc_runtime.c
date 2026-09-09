@@ -25,6 +25,7 @@
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/tlbflush.h>
+#include <asm/unistd.h>
 
 struct nacc_linux_runtime_call {
 	struct completion completion;
@@ -326,11 +327,23 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 	/* trap 区只捕获公开参数；可阻塞的 syscall 必须移到 Linux continuation。 */
 	if (!regs || !irqs_disabled() || !owner.task || owner.task != current ||
 	    !owner.sequence || !owner.live_satp || owner.syscall.active ||
-	    csr_read(CSR_SATP) != owner.live_satp || regs->a0 != 64 ||
-	    regs->a1 != 2 || regs->a2 != owner.mailbox_virtual_address ||
-	    !regs->a3 || regs->a3 > PAGE_SIZE || regs->a4 || regs->a5 ||
+	    csr_read(CSR_SATP) != owner.live_satp || regs->a4 || regs->a5 ||
 	    regs->a6)
 		panic("NACC AS syscall invariant failed");
+	switch (regs->a0) {
+	case __NR_write:
+		if (regs->a1 != 2 ||
+		    regs->a2 != owner.mailbox_virtual_address || !regs->a3 ||
+		    regs->a3 > PAGE_SIZE)
+			panic("NACC AS write syscall invariant failed");
+		break;
+	case __NR_getpid:
+		if (regs->a1 || regs->a2 || regs->a3)
+			panic("NACC AS getpid syscall invariant failed");
+		break;
+	default:
+		panic("NACC AS unsupported syscall invariant failed");
+	}
 	nacc_linux_runtime_enter_owner.syscall =
 		(struct nacc_linux_runtime_syscall_owner) {
 		.active = 1,
@@ -390,8 +403,12 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 	/* 当前 slice 不得静默绕过 seccomp/audit/ptrace 等未接通 policy。 */
 	if (READ_ONCE(current_thread_info()->syscall_work))
 		result = -ENOSYS;
-	else
+	else if (owner.syscall.number == __NR_write)
 		result = nacc_linux_runtime_write_bounce(&owner);
+	else if (owner.syscall.number == __NR_getpid)
+		result = task_tgid_vnr(current);
+	else
+		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();
 	if (!irqs_disabled() || current != owner.task ||
 	    csr_read(CSR_SATP) != owner.live_satp ||

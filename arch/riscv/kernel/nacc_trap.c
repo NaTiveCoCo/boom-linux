@@ -2,8 +2,8 @@
 /*
  * NACC AS -> Linux synchronous service entry。
  *
- * BOOTSTRAP_READY 是一次性 AS→Linux handoff；SYSCALL 当前只接通有界 write(2)；
- * EXIT 是最小 runtime terminal handoff。
+ * BOOTSTRAP_READY 是一次性 AS→Linux handoff；SYSCALL 当前只接通有界 write(2)
+ * 与 scalar getpid(2)；EXIT 是最小 runtime terminal handoff。
  */
 
 #include <linux/entry-common.h>
