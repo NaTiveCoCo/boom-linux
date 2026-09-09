@@ -343,6 +343,10 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 		break;
 	case __NR_mmap:
 		break;
+	case __NR_munmap:
+		if (regs->a3 || regs->a4 || regs->a5 || regs->a6)
+			panic("NACC AS munmap syscall invariant failed");
+		break;
 	default:
 		panic("NACC AS unsupported syscall invariant failed");
 	}
@@ -434,6 +438,10 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 		result = task_tgid_vnr(current);
 	else if (owner.syscall.number == __NR_mmap)
 		result = nacc_linux_runtime_mmap_one_page(&owner);
+	else if (owner.syscall.number == __NR_munmap) {
+		pr_info("NACC Linux munmap transaction is not implemented\n");
+		result = -EOPNOTSUPP;
+	}
 	else
 		panic("NACC syscall continuation number invariant failed");
 	local_irq_disable();
