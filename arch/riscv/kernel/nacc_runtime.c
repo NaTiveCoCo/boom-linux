@@ -332,10 +332,11 @@ void nacc_linux_runtime_syscall_capture(struct pt_regs *regs)
 		panic("NACC AS syscall invariant failed");
 	switch (regs->a0) {
 	case __NR_write:
+	case __NR_writev:
 		if (regs->a1 != 2 ||
 		    regs->a2 != owner.mailbox_virtual_address || !regs->a3 ||
 		    regs->a3 > PAGE_SIZE)
-			panic("NACC AS write syscall invariant failed");
+			panic("NACC AS write/writev syscall invariant failed");
 		break;
 	case __NR_getpid:
 		if (regs->a1 || regs->a2 || regs->a3)
@@ -403,7 +404,9 @@ asmlinkage __visible __noreturn void nacc_linux_runtime_syscall_complete(void)
 	/* 当前 slice 不得静默绕过 seccomp/audit/ptrace 等未接通 policy。 */
 	if (READ_ONCE(current_thread_info()->syscall_work))
 		result = -ENOSYS;
-	else if (owner.syscall.number == __NR_write)
+	/* writev 已由 Agent 严格展平为一个 mailbox buffer。 */
+	else if (owner.syscall.number == __NR_write ||
+		 owner.syscall.number == __NR_writev)
 		result = nacc_linux_runtime_write_bounce(&owner);
 	else if (owner.syscall.number == __NR_getpid)
 		result = task_tgid_vnr(current);
