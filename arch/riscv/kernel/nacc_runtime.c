@@ -445,7 +445,8 @@ static long nacc_linux_runtime_mmap_one_page(
 	if (nacc_linux_runtime_enter_owner.mmap_active ||
 	    nacc_linux_runtime_enter_owner.mmap_vma ||
 	    nacc_linux_runtime_enter_owner.munmap.state !=
-		    NACC_LINUX_RUNTIME_MUNMAP_IDLE)
+		    NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
+	    atomic_read(&current->mm->mm_users) != 1)
 		panic("NACC mmap publication invariant failed");
 	mmap_write_lock(current->mm);
 	vma = find_vma(current->mm, NACC_ENTER_MMAP_VIRTUAL_ADDRESS);
@@ -504,7 +505,8 @@ static long nacc_linux_runtime_munmap_prepare(
 	if (!owner->mmap_active ||
 	    owner->munmap.state != NACC_LINUX_RUNTIME_MUNMAP_IDLE ||
 	    owner->munmap.mm || !owner->next_munmap_generation ||
-	    !owner->mmap_vma || !owner->mmap_vm_flags)
+	    !owner->mmap_vma || !owner->mmap_vm_flags ||
+	    atomic_read(&current->mm->mm_users) != 1)
 		panic("NACC munmap prepare state invariant failed");
 	if (signal_pending(current))
 		return -EINTR;
