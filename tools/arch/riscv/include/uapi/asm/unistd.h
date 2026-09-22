@@ -46,9 +46,9 @@ __SYSCALL(__NR_riscv_flush_icache, sys_riscv_flush_icache)
 // #endif
 
 /* register the current nacc process in the monitor. */
-#ifndef __NR_nacc_register
-#define __NR_nacc_register  (__NR_arch_specific_syscall + 12)
+#ifndef __NR_nacre_register
+#define __NR_nacre_register  (__NR_arch_specific_syscall + 12)
 #endif
 
 //__SYSCALL(__NR_nacc_invoke, sys_nacc_invoke)
-__SYSCALL(__NR_nacc_register, sys_nacc_register)
+__SYSCALL(__NR_nacre_register, sys_nacre_register)

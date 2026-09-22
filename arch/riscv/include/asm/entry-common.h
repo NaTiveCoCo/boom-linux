@@ -5,12 +5,17 @@
 
 #include <asm/stacktrace.h>
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 #include <asm/thread_info.h>
 #include <asm/vector.h>
 
 static inline void arch_exit_to_user_mode_prepare(struct pt_regs *regs,
 						  unsigned long ti_work)
 {
+	/* Cancel skipped exec requests and validate the final handoff state only. */
+	if (unlikely(current->thread.nacre_flag != NACRE_IDLE))
+		nacre_user_return_prepare(regs);
+
 	if (ti_work & _TIF_RISCV_V_DEFER_RESTORE) {
 		clear_thread_flag(TIF_RISCV_V_DEFER_RESTORE);
 		/*

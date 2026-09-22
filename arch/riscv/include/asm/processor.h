@@ -106,6 +106,11 @@ struct thread_struct {
     unsigned long nacc_flag;
     unsigned long nacc_cid;
 
+	/* Exec registration is independent of the legacy NACC lifecycle. */
+	unsigned long nacre_flag;
+	unsigned long nacre_cid;
+	unsigned long nacre_entry;
+
 	unsigned long bad_cause;
 	u32 riscv_v_flags;
 	u32 vstate_ctrl;

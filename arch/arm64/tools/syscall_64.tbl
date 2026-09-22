@@ -302,7 +302,7 @@
 
 244	or1k	or1k_atomic			sys_or1k_atomic
 
-256 riscv   nacc_register           sys_nacc_register
+256 riscv   nacre_register           sys_nacre_register
 
 258	riscv	riscv_hwprobe			sys_riscv_hwprobe
 259	riscv	riscv_flush_icache		sys_riscv_flush_icache

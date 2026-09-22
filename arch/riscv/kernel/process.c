@@ -200,6 +200,10 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
 	fstate_save(src, task_pt_regs(src));
 	*dst = *src;
+	/* A new task must request its own exec registration. */
+	dst->thread.nacre_flag = 0;
+	dst->thread.nacre_cid = 0;
+	dst->thread.nacre_entry = 0;
 	/* clear entire V context, including datap for a new task */
 	memset(&dst->thread.vstate, 0, sizeof(struct __riscv_v_ext_state));
 	memset(&dst->thread.kernel_vstate, 0, sizeof(struct __riscv_v_ext_state));

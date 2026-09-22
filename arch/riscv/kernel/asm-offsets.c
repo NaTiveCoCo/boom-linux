@@ -86,6 +86,10 @@ void asm_offsets(void)
 
     /* Nacc flag */
     OFFSET(TASK_THREAD_NACC_FLAG, task_struct, thread.nacc_flag);
+	OFFSET(TASK_THREAD_NACRE_FLAG, task_struct, thread.nacre_flag);
+	OFFSET(TASK_THREAD_NACRE_CID, task_struct, thread.nacre_cid);
+	OFFSET(TASK_THREAD_NACRE_ENTRY, task_struct, thread.nacre_entry);
+	OFFSET(TASK_NACRE_PID, task_struct, pid);
     
 #ifdef CONFIG_STACKPROTECTOR
 	OFFSET(TSK_STACK_CANARY, task_struct, stack_canary);

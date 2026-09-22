@@ -72,6 +72,9 @@
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
+#ifdef CONFIG_RISCV
+#include <asm/nacre_registration.h>
+#endif
 
 #ifdef NACC
 #include <asm/nacc.h>
@@ -409,6 +412,16 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	err = __bprm_mm_init(bprm);
 	if (err)
 		goto err;
+
+#ifdef CONFIG_RISCV
+	err = nacre_exec_reserve(mm);
+	if (err) {
+		/* __bprm_mm_init() has already installed the temporary stack VMA. */
+		bprm->mm = NULL;
+		mmput(mm);
+		return err;
+	}
+#endif
 
 #ifdef NACC
 	if (current->thread.nacc_flag == NACC_PREPARE ||
@@ -1929,6 +1942,10 @@ static int bprm_execve(struct linux_binprm *bprm)
 	user_events_execve(current);
 	acct_update_integrals(current);
 	task_numa_free(current, false);
+#ifdef CONFIG_RISCV
+	/* The binary handler has committed mm and established the application frame. */
+	nacre_exec_prepare(bprm);
+#endif
 #ifdef NACC
 	if (current->thread.nacc_flag == NACC_PREPARE) {
 		nacc_invoke();
@@ -1971,8 +1988,10 @@ static int do_execveat_common(int fd, struct filename *filename,
 	struct linux_binprm *bprm;
 	int retval;
 
-	if (IS_ERR(filename))
-		return PTR_ERR(filename);
+	if (IS_ERR(filename)) {
+		retval = PTR_ERR(filename);
+		goto out;
+	}
 
 	/*
 	 * We move the actual failure in case of RLIMIT_NPROC excess from
@@ -2053,6 +2072,14 @@ out_free:
 
 out_ret:
 	putname(filename);
+out:
+#ifdef CONFIG_RISCV
+	if (retval < 0)
+		nacre_exec_cancel();
+	else if (current->thread.nacre_flag == NACRE_PREPARED)
+		/* Successful exec owns the non-returning Agent continuation. */
+		nacre_exec_handoff();
+#endif
 	return retval;
 }
 

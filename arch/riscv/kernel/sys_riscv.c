@@ -879,28 +879,6 @@ int nacc_retire_private_pfn_sbi(unsigned long pfn)
 	return nacc_release_private_pfn_sbi(pfn);
 }
 
-SYSCALL_DEFINE1(nacc_register, unsigned long, cid)
-{
-    unsigned long pid;
-    nacc_debug("[Linux] register a new NACC process. \n");
-
-    /*
-     * Mark the current process as nacc process here.
-     * However, as the preparation state.
-     */
-    current->thread.nacc_flag = NACC_PREPARE;
-    current->thread.nacc_cid = cid;
-
-    pid = current->pid;
-    nacc_debug("[Linux]: container id is %lx. \n", cid);
-
-	sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_REGISTER, cid, pid, 0, 0, 0, 0);
-
-    nacc_debug("[Linux]: GO BACK TO RUNC. \n");
-
-    return 0;
-}
-
 /* Not defined using SYSCALL_DEFINE0 to avoid error injection */
 asmlinkage long __riscv_sys_ni_syscall(const struct pt_regs *__unused)
 {
