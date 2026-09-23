@@ -524,22 +524,6 @@ void nacc_unregister_current_pid(void)
 		   pid, current->thread.nacc_cid);
 }
 
-void nacc_set_ptes_sbi(unsigned long ptep_pa, unsigned long pteval,
-		       unsigned int nr, unsigned long start_va,
-		       unsigned long root_pgd_pa)
-{
-	struct sbiret ret;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_SET_PTES, ptep_pa,
-			pteval, nr, start_va, root_pgd_pa, 0);
-	if (ret.error) {
-		printk(KERN_ERR "[Linux]: nacc_set_ptes_sbi failed: ptep_pa=%lx pteval=%lx nr=%u start_va=%lx root=%lx err=%ld val=%ld\n",
-		       ptep_pa, pteval, nr, start_va, root_pgd_pa,
-		       ret.error, ret.value);
-		panic("NaCC secure SET_PTES protocol failure");
-	}
-}
-
 void nacc_import_user_leaf_sbi(unsigned long ptep_pa,
 			       unsigned long source_pteval,
 			       unsigned long destination_pfn,
@@ -572,106 +556,6 @@ void nacc_fresh_zero_leaf_sbi(unsigned long ptep_pa, unsigned long pteval,
 		       ptep_pa, pteval, start_va, root_pgd_pa, ret.error,
 		       ret.value);
 		panic("NaCC fresh-zero leaf transaction failed");
-	}
-}
-
-#define NACC_SBI_ENOSPC	(-1003L)
-#define NACC_SBI_ENOMEM	(-1004L)
-
-int nacc_request_ptp_sbi(unsigned long *pfn_out)
-{
-	struct sbiret ret;
-
-	if (!pfn_out)
-		return -EINVAL;
-	*pfn_out = 0;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_LINUX_REQ_PTP,
-			0, 0, 0, 0, 0, 0);
-	if (ret.error) {
-		if (ret.error == NACC_SBI_ENOSPC ||
-		    ret.error == NACC_SBI_ENOMEM)
-			return -ENOMEM;
-		printk(KERN_ERR "[Linux]: unexpected REQ_PTP failure: err=%ld val=%ld\n",
-		       ret.error, ret.value);
-		panic("NaCC Secure PTP request protocol failure");
-	}
-	if (!nacc_pfn_is_secure_ptp(ret.value)) {
-		printk(KERN_ERR "[Linux]: REQ_PTP returned invalid PFN: pfn=%lx\n",
-		       ret.value);
-		panic("NaCC Secure PTP request returned invalid PFN");
-	}
-
-	*pfn_out = ret.value;
-	return 0;
-}
-
-void nacc_populate_ptp_sbi(unsigned long root_pgd_pa,
-			   unsigned long parent_slot_pa,
-			   unsigned long child_pfn)
-{
-	struct sbiret ret;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_POPULATE_PTP,
-			root_pgd_pa, parent_slot_pa, child_pfn, 0, 0, 0);
-	if (ret.error) {
-		printk(KERN_ERR "[Linux]: exact PTP population failed: root=%lx parent_slot=%lx child_pfn=%lx err=%ld val=%ld\n",
-		       root_pgd_pa, parent_slot_pa, child_pfn,
-		       ret.error, ret.value);
-		panic("NaCC exact Secure PTP population failed");
-	}
-}
-
-void nacc_cancel_ptp_sbi(unsigned long pfn)
-{
-	struct sbiret ret;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_CANCEL_PTP,
-			pfn, 0, 0, 0, 0, 0);
-	if (ret.error) {
-		printk(KERN_ERR "[Linux]: fresh PTP cancellation failed: pfn=%lx err=%ld val=%ld\n",
-		       pfn, ret.error, ret.value);
-		panic("NaCC fresh Secure PTP cancellation failed");
-	}
-}
-
-int nacc_unlink_ptp_sbi(unsigned long root_pgd_pa,
-			unsigned long parent_slot_pa,
-			unsigned long expected_child_pfn,
-			unsigned long *child_pfn_out)
-{
-	struct sbiret ret;
-
-	if (!child_pfn_out)
-		return -EINVAL;
-	*child_pfn_out = 0;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_UNLINK_PTP,
-			root_pgd_pa, parent_slot_pa, expected_child_pfn,
-			0, 0, 0);
-	if (ret.error) {
-		if (ret.error == NACC_SBI_ENOSPC)
-			return -EAGAIN;
-		printk(KERN_ERR "[Linux]: exact PTP unlink failed: root=%lx parent_slot=%lx expected_child_pfn=%lx err=%ld val=%ld\n",
-		       root_pgd_pa, parent_slot_pa, expected_child_pfn,
-		       ret.error, ret.value);
-		panic("NaCC exact Secure PTP unlink failed");
-	}
-
-	*child_pfn_out = ret.value;
-	return 0;
-}
-
-void nacc_finish_ptp_release_sbi(unsigned long pfn)
-{
-	struct sbiret ret;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_FINISH_PTP_RELEASE,
-			pfn, 0, 0, 0, 0, 0);
-	if (ret.error) {
-		printk(KERN_ERR "[Linux]: pending PTP finish failed: pfn=%lx err=%ld val=%ld\n",
-		       pfn, ret.error, ret.value);
-		panic("NaCC pending Secure PTP finish failed");
 	}
 }
 
@@ -711,24 +595,9 @@ void nacc_flush_and_drain_sbi(struct mm_struct *mm)
 	} while (ret.error == SBI_ERR_ALREADY_AVAILABLE);
 
 	if (ret.error) {
-		printk(KERN_ERR "[Linux]: Secure-PTP gather flush/drain failed: root=%lx err=%ld val=%ld\n",
+		printk(KERN_ERR "[Linux]: legacy Agent gather flush/drain failed: root=%lx err=%ld val=%ld\n",
 		       root_pgd_pa, ret.error, ret.value);
-		panic("NaCC Secure-PTP gather flush/drain failed");
-	}
-}
-
-void nacc_wrprotect_ptes_sbi(unsigned long ptep_pa, unsigned int nr,
-			     unsigned long start_va,
-			     unsigned long root_pgd_pa)
-{
-	struct sbiret ret;
-
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_WRPROTECT_PTES, ptep_pa,
-			nr, start_va, root_pgd_pa, 0, 0);
-	if (ret.error) {
-		printk(KERN_ERR "[Linux]: nacc_wrprotect_ptes_sbi failed: ptep_pa=%lx nr=%u start_va=%lx root=%lx err=%ld val=%ld\n",
-		       ptep_pa, nr, start_va, root_pgd_pa, ret.error,
-		       ret.value);
+		panic("NaCC legacy Agent gather flush/drain failed");
 	}
 }
 

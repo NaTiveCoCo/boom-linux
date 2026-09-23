@@ -17,11 +17,6 @@
 #include <asm/tlbflush.h>
 
 
-static unsigned long nacc_ptdesc_raw_ptl(struct ptdesc *ptdesc)
-{
-       return READ_ONCE(*(unsigned long *)&ptdesc->ptl);
-}
-
 unsigned long nacc_mm_state(struct mm_struct *mm)
 {
 	if (!mm)
@@ -1015,25 +1010,3 @@ void pgtbl_debug(unsigned long pgd)
     (void)pgd;
 #endif
 }
-
-void nacc_reclaim_ptp_dtor(struct ptdesc *ptdesc, unsigned long pfn,
-			   unsigned int level, const char *tag)
-{
-	unsigned long old_ptl = nacc_ptdesc_raw_ptl(ptdesc);
-
-	if (level == 1)
-		pagetable_pmd_dtor(ptdesc);
-	else
-		pagetable_pte_dtor(ptdesc);
-
-	/*
-	 * Pure NACC pages skip buddy free, so they never get prep_new_page().
-	 * Reset the split-ptlock storage explicitly to make the next ctor
-	 * observe the same zero state that the allocator would have provided.
-	 */
-	WRITE_ONCE(*(unsigned long *)&ptdesc->ptl, 0);
-	nacc_debug("[Linux]: %s: reclaimed pfn=%lx level=%u old_ptl=%lx new_ptl=%lx\n",
-		   tag, pfn, level, old_ptl,
-		   nacc_ptdesc_raw_ptl(ptdesc));
-}
-EXPORT_SYMBOL(nacc_reclaim_ptp_dtor);

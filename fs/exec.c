@@ -74,6 +74,7 @@
 #include <asm/tlb.h>
 #ifdef CONFIG_RISCV
 #include <asm/nacre_registration.h>
+#include <asm/nacre_ptp.h>
 #endif
 
 #ifdef NACC
@@ -391,6 +392,10 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	err = -ENOMEM;
 	if (!mm)
 		goto err;
+
+#ifdef CONFIG_RISCV
+	nacre_mm_init(mm);
+#endif
 
 #ifdef NACC
 	if (current->thread.nacc_flag == NACC_PREPARE ||

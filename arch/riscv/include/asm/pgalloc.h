@@ -10,6 +10,7 @@
 #include <linux/mm.h>
 #include <asm/sbi.h>
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 #include <asm/tlb.h>
 
 #ifdef CONFIG_MMU
@@ -40,12 +41,8 @@ static inline void pmd_populate(struct mm_struct *mm,
 	unsigned long pfn = virt_to_pfn(page_address(pte));
 	pmd_t new_pmd = __pmd((pfn << _PAGE_PFN_SHIFT) | _PAGE_TABLE);
 
-	if (nacc_pfn_is_secure_ptp(pfn)) {
-		if (!mm)
-			panic("NaCC Secure PTP population without mm denied");
-		nacc_populate_ptp_sbi(__pa(mm->pgd), __pa(pmd), pfn);
+	if (nacre_ptp_populate(mm, pmd, pfn))
 		return;
-	}
 
 	set_pmd(pmd, new_pmd);
 }
@@ -56,12 +53,8 @@ static inline void pud_populate(struct mm_struct *mm, pud_t *pud, pmd_t *pmd)
 	unsigned long pfn = virt_to_pfn(pmd);
 	pud_t new_pud = __pud((pfn << _PAGE_PFN_SHIFT) | _PAGE_TABLE);
 
-	if (nacc_pfn_is_secure_ptp(pfn)) {
-		if (!mm)
-			panic("NaCC root PTP population without mm denied");
-		nacc_populate_ptp_sbi(__pa(mm->pgd), __pa(pud), pfn);
+	if (nacre_ptp_populate(mm, pud, pfn))
 		return;
-	}
 
 	set_pud(pud, new_pud);
 }
@@ -221,13 +214,9 @@ static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd,
 				  unsigned long addr)
 {
 	struct ptdesc *ptdesc = virt_to_ptdesc(pmd);
-	unsigned long pfn = page_to_pfn(ptdesc_page(ptdesc));
 
-	if (nacc_pfn_is_secure_ptp(pfn)) {
-		nacc_reclaim_ptp_dtor(ptdesc, pfn, 1, "__pmd_free_tlb");
-		nacc_finish_ptp_release_sbi(pfn);
+	if (nacre_ptp_release(tlb->mm, ptdesc, 1, true))
 		return;
-	}
 
 	pagetable_pmd_dtor(ptdesc);
 	riscv_tlb_remove_ptdesc(tlb, ptdesc);
@@ -239,13 +228,9 @@ static inline void __pte_free_tlb(struct mmu_gather *tlb, pgtable_t pte,
 				  unsigned long addr)
 {
 	struct ptdesc *ptdesc = page_ptdesc(pte);
-	unsigned long pfn = page_to_pfn(ptdesc_page(ptdesc));
 
-	if (nacc_pfn_is_secure_ptp(pfn)) {
-		nacc_reclaim_ptp_dtor(ptdesc, pfn, 0, "__pte_free_tlb");
-		nacc_finish_ptp_release_sbi(pfn);
+	if (nacre_ptp_release(tlb->mm, ptdesc, 0, true))
 		return;
-	}
 
 	pagetable_pte_dtor(ptdesc);
 	riscv_tlb_remove_ptdesc(tlb, ptdesc);

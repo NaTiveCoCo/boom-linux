@@ -8,6 +8,7 @@
 #include <linux/syscalls.h>
 #include <asm/nacc.h>
 #include <asm/nacre_registration.h>
+#include <asm/nacre_ptp.h>
 #include <asm/sbi.h>
 #include <asm/csr.h>
 #include <asm/unistd.h>
@@ -93,6 +94,7 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 		return;
 	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED ||
 	       !bprm->point_of_no_return || bprm->mm || !mm ||
+	       !nacre_mm_constructing(mm) || mm->context.nacre_cid != current->thread.nacre_cid ||
 	       current->active_mm != mm ||
 	       !user_mode(regs) || current->ptrace || signal_pending(current));
 	/* Materialize the successful exec return value in the initial app frame. */

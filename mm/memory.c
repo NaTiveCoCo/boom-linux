@@ -186,82 +186,36 @@ void mm_trace_rss_stat(struct mm_struct *mm, int member)
 	trace_rss_stat(mm, member);
 }
 
+/* Legacy Agent subtree teardown; NACRE user PTPs synchronize in UNLINK. */
+static void nacc_mark_agent_slot_unlinked(struct mmu_gather *tlb,
+					unsigned long addr)
+{
+	tlb_flush_pud_range(tlb, addr, PAGE_SIZE);
+	tlb->freed_tables = 1;
+}
+
+static void nacc_force_agent_gather_drain(struct mmu_gather *tlb,
+					unsigned long addr)
+{
+	nacc_mark_agent_slot_unlinked(tlb, addr);
+	tlb_flush_mmu_tlbonly(tlb);
+}
+
 /*
  * Note: this doesn't free the actual pages themselves. That
  * has been handled earlier when unmapping all the memory regions.
  */
-static void nacc_mark_secure_ptp_unlinked(struct mmu_gather *tlb,
-					 unsigned long addr,
-					 unsigned int child_level)
-{
-	if (child_level == 0)
-		tlb_flush_pmd_range(tlb, addr, PAGE_SIZE);
-	else
-		tlb_flush_pud_range(tlb, addr, PAGE_SIZE);
-	tlb->freed_tables = 1;
-}
-
-static void nacc_force_gather_drain(struct mmu_gather *tlb,
-				    unsigned long addr,
-				    unsigned int child_level)
-{
-	nacc_mark_secure_ptp_unlinked(tlb, addr, child_level);
-	tlb_flush_mmu_tlbonly(tlb);
-}
-
-static unsigned long nacc_unlink_ptp_with_retry(struct mmu_gather *tlb,
-						unsigned long parent_slot_pa,
-						unsigned long expected_child_pfn,
-						unsigned long addr,
-						unsigned int child_level)
-{
-	unsigned long child_pfn;
-	int ret;
-
-	ret = nacc_unlink_ptp_sbi(__pa(tlb->mm->pgd), parent_slot_pa,
-				  expected_child_pfn, &child_pfn);
-	if (ret == -EAGAIN) {
-		nacc_force_gather_drain(tlb, addr, child_level);
-		ret = nacc_unlink_ptp_sbi(__pa(tlb->mm->pgd),
-					  parent_slot_pa,
-					  expected_child_pfn, &child_pfn);
-	}
-	if (ret)
-		panic("NaCC Secure PTP pending set stayed full after gather drain");
-
-	return child_pfn;
-}
-
 static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			   unsigned long addr)
 {
-	pgtable_t token;
-	unsigned long entry_pfn = __page_val_to_pfn(pmd_val(*pmd));
-	unsigned long token_pfn;
-	unsigned long pgtables_before = mm_pgtables_bytes(tlb->mm);
+	pgtable_t token = pmd_pgtable(*pmd);
 
-	if (nacc_mm_root_tagged(tlb->mm) &&
-	    nacc_pfn_is_secure_ptp(entry_pfn)) {
-		token_pfn = nacc_unlink_ptp_with_retry(tlb, __pa(pmd),
-						       entry_pfn, addr, 0);
-		token = pfn_to_page(token_pfn);
-		nacc_debug("free_pte_range: exact unlink pmd=%px child_pfn=%lx\n",
-			   pmd, token_pfn);
-		pte_free_tlb(tlb, token, addr);
-	} else {
-		token = pmd_pgtable(*pmd);
+	if (nacre_mm_constructing(tlb->mm))
+		nacre_ptp_unlink(tlb->mm, pmd, page_to_pfn(token));
+	else
 		pmd_clear(pmd);
-		pte_free_tlb(tlb, token, addr);
-		if (nacc_mm_is_active(tlb->mm))
-			nacc_debug("free_pte_range: cleared ordinary pmd=%px child_pfn=%lx\n",
-				   pmd, page_to_pfn(token));
-	}
+	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
-	if (nacc_mm_is_active(tlb->mm)) {
-		nacc_debug("[Linux]: free_pte_range: mm=%px addr=%lx token_pfn=%lx pgtables_bytes %lu -> %lu\n",
-			   tlb->mm, addr, page_to_pfn(token),
-			   pgtables_before, mm_pgtables_bytes(tlb->mm));
-	}
 }
  
 static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -271,17 +225,13 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 	pmd_t *pmd;
 	unsigned long next;
 	unsigned long start;
-	unsigned long pgtables_before;
 
 	start = addr;
-	// change the pmd here, make sure we are leading to the old pfn?
-	// but should not interfere with the unmap_exit function we've used before.
 	pmd = pmd_offset(pud, addr);
 	do {
 		next = pmd_addr_end(addr, end);
 		if (pmd_none_or_clear_bad(pmd))
 			continue;
-		// TODO: single swift change for pmd: new_pfn => old_pfn
 		free_pte_range(tlb, pmd, addr);
 	} while (pmd++, addr = next, addr != end);
 
@@ -297,33 +247,12 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		return;
 
 	pmd = pmd_offset(pud, start);
-	pgtables_before = mm_pgtables_bytes(tlb->mm);
-	if (nacc_mm_root_tagged(tlb->mm) &&
-	    nacc_pfn_is_secure_ptp(__page_val_to_pfn(pud_val(*pud)))) {
-		unsigned long child_pfn;
-		unsigned long expected_child_pfn =
-			__page_val_to_pfn(pud_val(*pud));
-
-		child_pfn = nacc_unlink_ptp_with_retry(tlb, __pa(pud),
-						       expected_child_pfn,
-						       start, 1);
-		pmd = (pmd_t *)pfn_to_virt(child_pfn);
-	} else {
+	if (nacre_mm_constructing(tlb->mm))
+		nacre_ptp_unlink(tlb->mm, pud, virt_to_pfn(pmd));
+	else
 		pud_clear(pud);
-	}
-    // if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: after pud_clear\n");
-	// }
 	pmd_free_tlb(tlb, pmd, start);
 	mm_dec_nr_pmds(tlb->mm);
-	if (nacc_mm_is_active(tlb->mm)) {
-		nacc_debug("[Linux]: free_pmd_range: mm=%px start=%lx pgtables_bytes %lu -> %lu\n",
-			   tlb->mm, start, pgtables_before,
-			   mm_pgtables_bytes(tlb->mm));
-	}
-    // if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: after mm_dec_nr_pmds\n");
-	// }
 }
 
 static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
@@ -1846,7 +1775,8 @@ static struct page *nacc_private_leaf_page(struct mm_struct *mm,
 		return NULL;
 
 	pfn = pte_pfn(ptent);
-	if (!pfn_valid(pfn) || is_zero_pfn(pfn) || nacc_pfn_is_secure_ptp(pfn))
+	if (!pfn_valid(pfn) || is_zero_pfn(pfn) ||
+	    nacre_ptp_contains(pfn_to_virt(pfn)))
 		return NULL;
 
 	if (pfn_out)
@@ -2212,11 +2142,11 @@ void unmap_page_range(struct mmu_gather *tlb,
 				break;
 			if (retries++ == 16)
 				break;
-			nacc_force_gather_drain(tlb, addr, 1);
+			nacc_force_agent_gather_drain(tlb, addr);
 		} while (1);
 		if (ret)
 			panic("NaCC Agent detach group stayed busy after gather drain retries");
-		nacc_mark_secure_ptp_unlinked(tlb, addr, 1);
+		nacc_mark_agent_slot_unlinked(tlb, addr);
 	} else {
 		do {
 			next = pgd_addr_end(addr, end);

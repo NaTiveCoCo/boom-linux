@@ -38,6 +38,7 @@ static inline void tlb_flush(struct mmu_gather *tlb)
 {
 #ifdef CONFIG_MMU
 #ifdef NACC
+	/* Unmigrated Agent subtree teardown; NACRE uses its own mm state. */
 	if (nacc_mm_root_tagged(tlb->mm)) {
 		nacc_flush_and_drain_sbi(tlb->mm);
 		return;

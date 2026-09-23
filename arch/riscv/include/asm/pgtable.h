@@ -13,6 +13,7 @@
 
 #ifdef NACC
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 #endif
 
 #ifndef CONFIG_MMU
@@ -247,18 +248,12 @@ static inline bool pmd_leaf(pmd_t pmd)
 
 static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
 {
+	if (nacre_ptp_contains(pmdp)) {
+		nacre_ptp_update(pmdp, pmd_val(pmd), 0);
+		return;
+	}
 	WRITE_ONCE(*pmdp, pmd);
 }
-
-#ifdef NACC
-
-static inline bool nacc_is_secure_ptp_virt(const void *ptr)
-{
-	unsigned long pfn = virt_to_pfn(ptr);
-
-	return nacc_pfn_is_secure_ptp(pfn);
-}
-#endif
 
 static inline void pmd_clear(pmd_t *pmdp)
 {
@@ -581,6 +576,11 @@ static inline int pte_same(pte_t pte_a, pte_t pte_b)
  */
 static inline void set_pte(pte_t *ptep, pte_t pteval)
 {
+	/* Protected PTP pages are readable in S-mode but written through M-mode. */
+	if (nacre_ptp_contains(ptep)) {
+		nacre_ptp_update(ptep, pte_val(pteval), 0);
+		return;
+	}
 	WRITE_ONCE(*ptep, pteval);
 }
 
@@ -592,17 +592,6 @@ static inline void __set_pte_at(struct mm_struct *mm, unsigned long addr,
 	if (pte_present(pteval) && pte_exec(pteval))
 		flush_icache_pte(mm, pteval);
 
-#ifdef NACC
-	if (mm && nacc_is_secure_ptp_virt(ptep) && nacc_use_secure_pt(mm)) {
-		/*
-		 * NaCC secure PTP pages are readable in S-mode but must be
-		 * written through M-mode.
-		 */
-		nacc_set_ptes_sbi(__pa(ptep), pte_val(pteval), 1, addr,
-				  __pa(mm->pgd));
-		return;
-	}
-#endif
 	set_pte(ptep, pteval);
 }
 
@@ -613,13 +602,6 @@ static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 {
 	page_table_check_ptes_set(mm, ptep, pteval, nr);
 
-#ifdef NACC
-	if (mm && nacc_is_secure_ptp_virt(ptep) && nacc_use_secure_pt(mm)) {
-		nacc_set_ptes_sbi(__pa(ptep), pte_val(pteval), nr, addr,
-				  __pa(mm->pgd));
-		return;
-	}
-#endif
 	for (;;) {
 		__set_pte_at(mm, addr, ptep, pteval);
 		if (--nr == 0)
@@ -648,18 +630,12 @@ extern int ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long a
 static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
 				       unsigned long address, pte_t *ptep)
 {
-#ifdef NACC
 	pte_t pte;
 
-	if (mm && nacc_is_secure_ptp_virt(ptep) && nacc_use_secure_pt(mm))
-		pte = __pte(nacc_update_pte_sbi(NACC_UPDATE_PTE_XCHG_ONE,
-						__pa(ptep), 0, address,
-						__pa(mm->pgd), 0));
+	if (nacre_ptp_contains(ptep))
+		pte = __pte(nacre_ptp_update(ptep, 0, 0));
 	else
 		pte = __pte(atomic_long_xchg((atomic_long_t *)ptep, 0));
-#else
-	pte_t pte = __pte(atomic_long_xchg((atomic_long_t *)ptep, 0));
-#endif
 	page_table_check_pte_clear(mm, pte);
 
 	return pte;
@@ -669,13 +645,10 @@ static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
 static inline void ptep_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pte_t *ptep)
 {
-#ifdef NACC
-	if (mm && nacc_is_secure_ptp_virt(ptep) && nacc_use_secure_pt(mm)) {
-		nacc_wrprotect_ptes_sbi(__pa(ptep), 1, address,
-					__pa(mm->pgd));
+	if (nacre_ptp_contains(ptep)) {
+		nacre_ptp_update(ptep, 0, 1);
 		return;
 	}
-#endif
 	atomic_long_and(~(unsigned long)_PAGE_WRITE, (atomic_long_t *)ptep);
 }
 
@@ -887,18 +860,12 @@ static inline int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm,
 					unsigned long address, pmd_t *pmdp)
 {
-#ifdef NACC
 	pmd_t pmd;
 
-	if (mm && nacc_is_secure_ptp_virt(pmdp) && nacc_use_secure_pt(mm))
-		pmd = __pmd(nacc_update_pte_sbi(NACC_UPDATE_PTE_XCHG_ONE,
-						__pa(pmdp), 0, address,
-						__pa(mm->pgd), 0));
+	if (nacre_ptp_contains(pmdp))
+		pmd = __pmd(nacre_ptp_update(pmdp, 0, 0));
 	else
 		pmd = __pmd(atomic_long_xchg((atomic_long_t *)pmdp, 0));
-#else
-	pmd_t pmd = __pmd(atomic_long_xchg((atomic_long_t *)pmdp, 0));
-#endif
 
 	page_table_check_pmd_clear(mm, pmd);
 
@@ -917,14 +884,8 @@ static inline pmd_t pmdp_establish(struct vm_area_struct *vma,
 				unsigned long address, pmd_t *pmdp, pmd_t pmd)
 {
 	page_table_check_pmd_set(vma->vm_mm, pmdp, pmd);
-#ifdef NACC
-	if (vma->vm_mm && nacc_is_secure_ptp_virt(pmdp) &&
-	    nacc_use_secure_pt(vma->vm_mm))
-		return __pmd(nacc_update_pte_sbi(NACC_UPDATE_PTE_XCHG_ONE,
-						 __pa(pmdp), pmd_val(pmd),
-						 address, __pa(vma->vm_mm->pgd),
-						 0));
-#endif
+	if (nacre_ptp_contains(pmdp))
+		return __pmd(nacre_ptp_update(pmdp, pmd_val(pmd), 0));
 	return __pmd(atomic_long_xchg((atomic_long_t *)pmdp, pmd_val(pmd)));
 }
 

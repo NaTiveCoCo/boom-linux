@@ -17,6 +17,8 @@ typedef struct {
 #endif
 	void *vdso;
 	unsigned long nacc_state;
+	/* Exec construction ownership, independent of the legacy runtime state. */
+	unsigned long nacre_cid;
 #ifdef CONFIG_SMP
 	/* A local icache flush is needed before user execution can resume. */
 	cpumask_t icache_stale_mask;

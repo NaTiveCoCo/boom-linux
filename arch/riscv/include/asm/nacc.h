@@ -74,9 +74,6 @@ struct nacc_uaccess_string_read_desc {
  */
 #define NACC_EXEC        0b10000
 
-#define NACC_PTP_PFN_BASE  0x1b0000
-#define NACC_PTP_PFN_END   0x1c0000
-
 #define NACC_SHARED_POOL_PA_BASE	0x180000000UL
 #define NACC_SHARED_POOL_PA_SIZE	0x10000000UL
 
@@ -140,11 +137,6 @@ static inline bool nacc_use_secure_pt(struct mm_struct *mm)
 	       nacc_mm_is_active(mm);
 }
 
-static inline bool nacc_pfn_is_secure_ptp(unsigned long pfn)
-{
-	return pfn >= NACC_PTP_PFN_BASE && pfn < NACC_PTP_PFN_END;
-}
-
 static inline bool nacc_mm_root_tagged(struct mm_struct *mm)
 {
 	return !!(nacc_mm_state(mm) & NACC_MM_ROOT_TAGGED);
@@ -181,21 +173,9 @@ static inline int nacc_adopt_vdso_text(struct vm_area_struct *vma)
 }
 #endif
 
-void nacc_reclaim_ptp_dtor(struct ptdesc *ptdesc, unsigned long pfn,
-			   unsigned int level, const char *tag);
-int nacc_request_ptp_sbi(unsigned long *pfn_out);
-void nacc_cancel_ptp_sbi(unsigned long pfn);
-int nacc_unlink_ptp_sbi(unsigned long root_pgd_pa,
-			unsigned long parent_slot_pa,
-			unsigned long expected_child_pfn,
-			unsigned long *child_pfn_out);
-void nacc_finish_ptp_release_sbi(unsigned long pfn);
 int nacc_detach_agent_slot_sbi(unsigned long root_pgd_pa);
 void nacc_flush_and_drain_sbi(struct mm_struct *mm);
 
-void nacc_set_ptes_sbi(unsigned long ptep_pa, unsigned long pteval,
-		       unsigned int nr, unsigned long start_va,
-		       unsigned long root_pgd_pa);
 void nacc_import_user_leaf_sbi(unsigned long ptep_pa,
 			       unsigned long source_pteval,
 			       unsigned long destination_pfn,
@@ -204,12 +184,6 @@ void nacc_import_user_leaf_sbi(unsigned long ptep_pa,
 void nacc_fresh_zero_leaf_sbi(unsigned long ptep_pa, unsigned long pteval,
 			      unsigned long start_va,
 			      unsigned long root_pgd_pa);
-void nacc_populate_ptp_sbi(unsigned long root_pgd_pa,
-			   unsigned long parent_slot_pa,
-			   unsigned long child_pfn);
-void nacc_wrprotect_ptes_sbi(unsigned long ptep_pa, unsigned int nr,
-			     unsigned long start_va,
-			     unsigned long root_pgd_pa);
 unsigned long nacc_update_pte_sbi(unsigned long op, unsigned long ptep_pa,
 				  unsigned long operand, unsigned long start_va,
 				  unsigned long root_pgd_pa,

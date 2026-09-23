@@ -7,24 +7,9 @@
 #define GFP_PGTABLE_KERNEL	(GFP_KERNEL | __GFP_ZERO)
 #define GFP_PGTABLE_USER	(GFP_PGTABLE_KERNEL | __GFP_ACCOUNT)
 
-#ifdef NACC
-#include <asm/nacc.h>
-#include <asm/sbi.h>
-
-static inline bool nacc_cancel_fresh_ptdesc(struct ptdesc *ptdesc,
-					    unsigned int level,
-					    const char *tag)
-{
-	unsigned long pfn = page_to_pfn(ptdesc_page(ptdesc));
-
-	if (!nacc_pfn_is_secure_ptp(pfn))
-		return false;
-
-	nacc_reclaim_ptp_dtor(ptdesc, pfn, level, tag);
-	nacc_cancel_ptp_sbi(pfn);
-	return true;
-}
-#endif /* NACC */
+#ifdef CONFIG_RISCV
+#include <asm/nacre_ptp.h>
+#endif
 
 /**
  * __pte_alloc_one_kernel - allocate memory for a PTE-level kernel page table
@@ -85,22 +70,14 @@ static inline void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
 static inline pgtable_t __pte_alloc_one_noprof(struct mm_struct *mm, gfp_t gfp)
 {
 	struct ptdesc *ptdesc;
-	unsigned long new_pte_pfn = 0;
 
-#ifdef NACC
-	if (mm && nacc_use_secure_pt(mm)) {
-		if (nacc_request_ptp_sbi(&new_pte_pfn))
-			return NULL;
-		nacc_debug("[__pte_alloc] admitted fresh PTE PTP pfn=%lx\n",
-			   new_pte_pfn);
-		ptdesc = page_ptdesc(pfn_to_page(new_pte_pfn));
-		if (!pagetable_pte_ctor(ptdesc)) {
-			nacc_cancel_ptp_sbi(new_pte_pfn);
-			return NULL;
-		}
-		return ptdesc_page(ptdesc);
+#ifdef CONFIG_RISCV
+	if (nacre_mm_constructing(mm)) {
+		ptdesc = nacre_ptp_alloc(mm, 0);
+		return ptdesc ? ptdesc_page(ptdesc) : NULL;
 	}
 #endif
+
 
 	ptdesc = pagetable_alloc_noprof(gfp, 0);
 	if (!ptdesc)
@@ -144,8 +121,8 @@ static inline void pte_free(struct mm_struct *mm, struct page *pte_page)
 {
 	struct ptdesc *ptdesc = page_ptdesc(pte_page);
 
-#ifdef NACC
-	if (nacc_cancel_fresh_ptdesc(ptdesc, 0, "pte_free"))
+#ifdef CONFIG_RISCV
+	if (nacre_ptp_release(mm, ptdesc, 0, false))
 		return;
 #endif
 	pagetable_pte_dtor(ptdesc);
@@ -171,27 +148,17 @@ static inline pmd_t *pmd_alloc_one_noprof(struct mm_struct *mm, unsigned long ad
 {
 	struct ptdesc *ptdesc;
 	gfp_t gfp = GFP_PGTABLE_USER;
-	unsigned long new_pmd_pfn = 0;
 
 	if (mm == &init_mm)
 		gfp = GFP_PGTABLE_KERNEL;
 
-#ifdef NACC
-	if (mm && nacc_use_secure_pt(mm)) {
-		if (addr < 0x4000000000) {
-			if (nacc_request_ptp_sbi(&new_pmd_pfn))
-				return NULL;
-			nacc_debug("[__pmd_alloc] admitted fresh PMD PTP pfn=%lx\n",
-				   new_pmd_pfn);
-			ptdesc = page_ptdesc(pfn_to_page(new_pmd_pfn));
-			if (!pagetable_pmd_ctor(ptdesc)) {
-				nacc_cancel_ptp_sbi(new_pmd_pfn);
-				return NULL;
-			}
-			return ptdesc_address(ptdesc);
-		}
+#ifdef CONFIG_RISCV
+	if (nacre_mm_constructing(mm) && addr < (1UL << 38)) {
+		ptdesc = nacre_ptp_alloc(mm, 1);
+		return ptdesc ? ptdesc_address(ptdesc) : NULL;
 	}
 #endif
+
 
 	ptdesc = pagetable_alloc_noprof(gfp, 0);
 	if (!ptdesc)
@@ -212,8 +179,8 @@ static inline void pmd_free(struct mm_struct *mm, pmd_t *pmd)
 	struct ptdesc *ptdesc = virt_to_ptdesc(pmd);
 
 	BUG_ON((unsigned long)pmd & (PAGE_SIZE-1));
-#ifdef NACC
-	if (nacc_cancel_fresh_ptdesc(ptdesc, 1, "pmd_free"))
+#ifdef CONFIG_RISCV
+	if (nacre_ptp_release(mm, ptdesc, 1, false))
 		return;
 #endif
 	pagetable_pmd_dtor(ptdesc);

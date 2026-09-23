@@ -238,13 +238,7 @@ static pmd_t move_pmd_get_and_clear(struct mm_struct *mm, unsigned long addr,
 {
 	pmd_t pmd;
 
-#ifdef NACC
-	/* Secure PTP slots must be cleared through M-mode. */
-	if (mm && nacc_is_secure_ptp_virt(pmdp) && nacc_use_secure_pt(mm))
-		return __pmd(nacc_update_pte_sbi(NACC_UPDATE_PTE_XCHG_ONE,
-						 __pa(pmdp), 0, addr,
-						 __pa(mm->pgd), 0));
-#endif
+	/* pmd_clear() routes protected PTP writes through M-mode. */
 	pmd = *pmdp;
 	pmd_clear(pmdp);
 
