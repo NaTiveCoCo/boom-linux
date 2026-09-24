@@ -72,7 +72,7 @@ static inline pgtable_t __pte_alloc_one_noprof(struct mm_struct *mm, gfp_t gfp)
 	struct ptdesc *ptdesc;
 
 #ifdef CONFIG_RISCV
-	if (nacre_mm_constructing(mm)) {
+	if (nacre_mm_managed(mm)) {
 		ptdesc = nacre_ptp_alloc(mm, 0);
 		return ptdesc ? ptdesc_page(ptdesc) : NULL;
 	}
@@ -153,7 +153,7 @@ static inline pmd_t *pmd_alloc_one_noprof(struct mm_struct *mm, unsigned long ad
 		gfp = GFP_PGTABLE_KERNEL;
 
 #ifdef CONFIG_RISCV
-	if (nacre_mm_constructing(mm) && addr < (1UL << 38)) {
+	if (nacre_mm_managed(mm) && addr < (1UL << 38)) {
 		ptdesc = nacre_ptp_alloc(mm, 1);
 		return ptdesc ? ptdesc_address(ptdesc) : NULL;
 	}

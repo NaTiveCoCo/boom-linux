@@ -32,14 +32,10 @@ nacre_register_enter:
 	ori t1, t1, SR_SPP
 	csrw CSR_STATUS, t1
 	csrw CSR_EPC, a3
-	la t0, .Lnacre_unexpected_s_trap
-	csrw CSR_TVEC, t0
+	/* Keep the standard stvec: AS services enter the dedicated early gate. */
+	csrw CSR_SCRATCH, zero
 	li t0, NACRE_ASSTATUS_SPA
 	csrs NACRE_CSR_ASSTATUS, t0
 	sret
-	.balign 4
-.Lnacre_unexpected_s_trap:
-	/* AS ECALL always routes through S; the M guard terminates this exact trap. */
-	.word 0
 SYM_CODE_END(nacre_exec_handoff_asm)
 ASM_NOKPROBE(nacre_exec_handoff_asm)

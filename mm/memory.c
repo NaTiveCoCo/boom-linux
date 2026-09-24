@@ -210,7 +210,7 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 
-	if (nacre_mm_constructing(tlb->mm))
+	if (nacre_mm_managed(tlb->mm))
 		nacre_ptp_unlink(tlb->mm, pmd, page_to_pfn(token));
 	else
 		pmd_clear(pmd);
@@ -247,7 +247,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		return;
 
 	pmd = pmd_offset(pud, start);
-	if (nacre_mm_constructing(tlb->mm))
+	if (nacre_mm_managed(tlb->mm))
 		nacre_ptp_unlink(tlb->mm, pud, virt_to_pfn(pmd));
 	else
 		pud_clear(pud);

@@ -36,7 +36,7 @@ static unsigned long checked(unsigned long fid, unsigned long root,
 	return ret.value;
 }
 
-bool nacre_mm_constructing(struct mm_struct *mm)
+bool nacre_mm_managed(struct mm_struct *mm)
 {
 	return mm && mm->context.nacre_cid;
 }
@@ -77,7 +77,7 @@ struct ptdesc *nacre_ptp_alloc(struct mm_struct *mm, unsigned int level)
 {
 	struct sbiret ret;
 	struct ptdesc *ptdesc;
-	BUG_ON(!nacre_mm_constructing(mm) || level > 1);
+	BUG_ON(!nacre_mm_managed(mm) || level > 1);
 	ret = call(PTP_ALLOC, __pa(mm->pgd), level, 0, 0);
 	if (ret.error == PTP_ENOMEM)
 		return NULL;
@@ -129,7 +129,7 @@ bool nacre_ptp_release(struct mm_struct *mm, struct ptdesc *ptdesc,
 	unsigned long pfn = page_to_pfn(ptdesc_page(ptdesc));
 	if (!nacre_ptp_contains(ptdesc_address(ptdesc)))
 		return false;
-	BUG_ON(!nacre_mm_constructing(mm) || ptdesc->pt_mm != mm || level > 1);
+	BUG_ON(!nacre_mm_managed(mm) || ptdesc->pt_mm != mm || level > 1);
 	nacre_ptp_dtor(ptdesc, pfn, level, "nacre_ptp_release");
 	ptdesc->pt_mm = NULL;
 	checked(installed ? PTP_FREE : PTP_CANCEL, __pa(mm->pgd), pfn, 0, 0);
@@ -140,20 +140,20 @@ bool nacre_ptp_populate(struct mm_struct *mm, void *slot, unsigned long pfn)
 {
 	if (!nacre_ptp_contains(pfn_to_virt(pfn)))
 		return false;
-	BUG_ON(!nacre_mm_constructing(mm) || page_ptdesc(pfn_to_page(pfn))->pt_mm != mm);
+	BUG_ON(!nacre_mm_managed(mm) || page_ptdesc(pfn_to_page(pfn))->pt_mm != mm);
 	checked(PTP_LINK, __pa(mm->pgd), __pa(slot), pfn, 0);
 	return true;
 }
 
 void nacre_ptp_unlink(struct mm_struct *mm, void *slot, unsigned long pfn)
 {
-	BUG_ON(!nacre_mm_constructing(mm));
+	BUG_ON(!nacre_mm_managed(mm));
 	checked(PTP_UNLINK, __pa(mm->pgd), __pa(slot), pfn, 0);
 }
 
 unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op)
 {
 	struct mm_struct *mm = virt_to_ptdesc(slot)->pt_mm;
-	BUG_ON(!nacre_ptp_contains(slot) || !nacre_mm_constructing(mm));
+	BUG_ON(!nacre_ptp_contains(slot) || !nacre_mm_managed(mm));
 	return checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
 }

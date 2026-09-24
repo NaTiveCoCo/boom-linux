@@ -6,7 +6,7 @@
 struct mm_struct;
 struct ptdesc;
 
-bool nacre_mm_constructing(struct mm_struct *mm);
+bool nacre_mm_managed(struct mm_struct *mm);
 void nacre_mm_init(struct mm_struct *mm);
 bool nacre_ptp_contains(const void *ptr);
 struct ptdesc *nacre_ptp_alloc(struct mm_struct *mm, unsigned int level);

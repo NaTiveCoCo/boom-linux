@@ -55,6 +55,8 @@ DECLARE_DO_ERROR_INFO(do_trap_break);
 asmlinkage void handle_bad_stack(struct pt_regs *regs);
 asmlinkage void do_page_fault(struct pt_regs *regs);
 asmlinkage void do_irq(struct pt_regs *regs);
+asmlinkage void nacre_gate_dispatch(unsigned long cid, unsigned long pid,
+				   struct pt_regs *regs);
 asmlinkage void nacc_delegate_entry(struct pt_regs *regs, unsigned long kind,
 				    unsigned long cause);
 

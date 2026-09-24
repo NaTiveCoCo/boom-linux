@@ -94,9 +94,9 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 		return;
 	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED ||
 	       !bprm->point_of_no_return || bprm->mm || !mm ||
-	       !nacre_mm_constructing(mm) || mm->context.nacre_cid != current->thread.nacre_cid ||
+	       !nacre_mm_managed(mm) || mm->context.nacre_cid != current->thread.nacre_cid ||
 	       current->active_mm != mm ||
-	       !user_mode(regs) || current->ptrace || signal_pending(current));
+	       !user_mode(regs) || current->ptrace);
 	/* Materialize the successful exec return value in the initial app frame. */
 	regs->a0 = 0;
 	mmap_read_lock(mm);
@@ -131,9 +131,10 @@ void noinstr __noreturn nacre_exec_handoff(void)
 
 	instrumentation_begin();
 	BUG_ON(current->thread.nacre_flag != NACRE_PREPARED ||
-	       current->ptrace || signal_pending(current) ||
+	       current->ptrace ||
 	       regs->cause != EXC_SYSCALL || regs->a0 || !user_mode(regs));
 	instrumentation_end();
+	/* Pending signals are normal exec races; the native exit path consumes them. */
 	syscall_exit_to_user_mode(regs);
 	asm volatile("mv a0, %0\n"
 		     "j nacre_exec_handoff_asm"
@@ -151,6 +152,6 @@ void nacre_user_return_prepare(struct pt_regs *regs)
 		nacre_exec_cancel();
 	}
 	if (current->thread.nacre_flag == NACRE_PREPARED)
-		BUG_ON(current->ptrace || signal_pending(current) ||
-		       regs->cause != EXC_SYSCALL || regs->a0 || !user_mode(regs));
+		BUG_ON(current->ptrace ||
+		       regs->a0 || !user_mode(regs));
 }

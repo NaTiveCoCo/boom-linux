@@ -60,6 +60,11 @@ obj-y	+= setup.o
 obj-y	+= signal.o
 obj-y	+= syscall_table.o
 obj-y	+= sys_riscv.o nacre_registration.o nacre_entry.o
+obj-y	+= nacre_gate.o nacre_gate_asm.o
+
+# Keep the gate C dispatcher and assembly ABI in matching source files.
+$(obj)/nacre_gate_asm.o: $(src)/nacre_gate.S FORCE
+	$(call if_changed_dep,as_o_S)
 obj-y	+= sys_hwprobe.o
 obj-y	+= time.o
 obj-y	+= traps.o

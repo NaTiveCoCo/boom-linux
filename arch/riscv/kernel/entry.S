@@ -15,6 +15,7 @@
 #include <asm/thread_info.h>
 #include <asm/asm-offsets.h>
 #include <asm/errata_list.h>
+#include <asm/nacre_registration.h>
 #include <linux/sizes.h>
 
 	.section .irqentry.text, "ax"
@@ -100,6 +101,10 @@ SYM_CODE_START(handle_exception)
 	 */
 	csrrw tp, CSR_SCRATCH, tp
 	bnez tp, .Lsave_context
+	/* AS supplies kernel tp in sscratch after the swap, just like S. */
+	csrr tp, CSR_CAUSE
+	addi tp, tp, -NACRE_AS_ECALL
+	beqz tp, nacre_gate_entry
 
 .Lrestore_kernel_tpsp:
 	csrr tp, CSR_SCRATCH
@@ -203,18 +208,6 @@ SYM_CODE_START(handle_exception)
 SYM_CODE_END(handle_exception)
 ASM_NOKPROBE(handle_exception)
 
-SYM_FUNC_START(nacc_exception_handler_from_cause)
-	slli a0, a0, RISCV_LGPTR
-	la t0, excp_vect_table
-	la t1, excp_vect_table_end
-	add a0, t0, a0
-	bgeu a0, t1, 1f
-	REG_L a0, 0(a0)
-	ret
-1:
-	la a0, do_trap_unknown
-	ret
-SYM_FUNC_END(nacc_exception_handler_from_cause)
 
 /*
  * The ret_from_exception must be called with interrupt disabled. Here is the
