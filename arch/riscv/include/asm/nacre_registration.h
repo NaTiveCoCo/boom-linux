@@ -3,7 +3,7 @@
 #define _ASM_RISCV_NACRE_REGISTRATION_H
 
 #define NACRE_SBI_REGISTER_EXT 0x084e4143
-/* No input arguments; returns the Agent registration entry in sbiret.value. */
+/* No input arguments; returns the fixed Agent ingress in sbiret.value. */
 #define NACRE_SBI_PREPARE 0
 #define NACRE_CSR_ASSTATUS 0x7c2
 #define NACRE_ASSTATUS_SPA 2

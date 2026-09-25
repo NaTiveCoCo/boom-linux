@@ -31,7 +31,8 @@ nacre_register_enter:
 	and t1, t1, t0
 	ori t1, t1, SR_SPP
 	csrw CSR_STATUS, t1
-	csrw CSR_EPC, a3
+	/* Hardware enters astvec.BASE; sepc is not an AS entry selector. */
+	li a7, 0
 	/* Keep the standard stvec: AS services enter the dedicated early gate. */
 	csrw CSR_SCRATCH, zero
 	li t0, NACRE_ASSTATUS_SPA

@@ -95,10 +95,8 @@ SYM_CODE_START(nacre_gate_return)
 	ori t0, t0, SR_SPP
 	csrw CSR_STATUS, t0
 	REG_L t0, PT_EPC(sp)
-	addi t0, t0, 4
-	REG_S t0, PT_EPC(sp)
+	/* Keep the full R for Linux; only clear LR, never derive an AS target here. */
 	REG_SC zero, t0, PT_EPC(sp)
-	csrw CSR_EPC, t0
 	REG_L x1, PT_RA(sp)
 	REG_L x3, PT_GP(sp)
 	REG_L x4, PT_TP(sp)
