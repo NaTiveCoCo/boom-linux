@@ -78,6 +78,7 @@
 
 #ifdef NACC
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 #endif
 
 #include "exit.h"
@@ -927,6 +928,10 @@ void __noreturn do_exit(long code)
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
 
+	/* Cancel the Agent continuation while U/R and the live mm still exist. */
+#ifdef NACC
+	nacre_exit();
+#endif
 	exit_mm();
 #ifdef NACC
 	nacc_unregister_current_pid();

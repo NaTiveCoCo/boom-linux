@@ -59,7 +59,7 @@ obj-y	+= return_address.o
 obj-y	+= setup.o
 obj-y	+= signal.o
 obj-y	+= syscall_table.o
-obj-y	+= sys_riscv.o nacre_registration.o nacre_entry.o
+obj-y	+= sys_riscv.o nacre_registration.o nacre_entry.o nacre_exit.o
 obj-y	+= nacre_gate.o nacre_gate_asm.o
 
 # Keep the gate C dispatcher and assembly ABI in matching source files.

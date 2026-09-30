@@ -16,6 +16,8 @@
 #define PTP_UPDATE 8
 #define PTP_POOL_BASE 9
 #define PTP_POOL_END 10
+#define ROOT_RETIRE 11
+#define ROOT_READ 12
 #define PTP_ENOMEM SBI_ERR_NO_SHMEM
 
 /* The firmware's reserved PTP interval is fixed for this boot: [base, end). */
@@ -156,4 +158,27 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 	struct mm_struct *mm = virt_to_ptdesc(slot)->pt_mm;
 	BUG_ON(!nacre_ptp_contains(slot) || !nacre_mm_managed(mm));
 	return checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
+}
+
+/* Test the root slot, not a VMA identity: free_pgtables may merge ranges. */
+bool nacre_agent_slot(struct mm_struct *mm, unsigned long addr)
+{
+	return mm->context.nacre_prepared &&
+	       addr >= NACC_AGENT_VA_BASE && addr < NACC_AGENT_VA_SLOT_END;
+}
+
+void nacre_root_retire(struct mm_struct *mm)
+{
+	BUG_ON(!nacre_mm_managed(mm) || !mm->context.nacre_prepared);
+	checked(ROOT_RETIRE, __pa(mm->pgd), 0, 0, 0);
+	mm->context.nacre_prepared = 0;
+	asm volatile(".global nacre_root_retired\nnacre_root_retired: nop" ::: "memory");
+}
+
+/* An exiting task may borrow a different active_mm after a normal reschedule. */
+unsigned long nacre_root_entry(struct mm_struct *mm, unsigned long addr)
+{
+	BUG_ON(!nacre_mm_managed(mm) || !mm->context.nacre_prepared ||
+	       pgtable_l4_enabled || pgtable_l5_enabled || addr >= (1UL << 38));
+	return checked(ROOT_READ, __pa(mm->pgd), addr >> 30, 0, 0);
 }

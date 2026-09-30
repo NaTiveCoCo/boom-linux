@@ -248,7 +248,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 
 	pmd = pmd_offset(pud, start);
 	if (nacre_mm_managed(tlb->mm))
-		nacre_ptp_unlink(tlb->mm, pud, virt_to_pfn(pmd));
+		nacre_ptp_unlink(tlb->mm, pgd_offset(tlb->mm, start), virt_to_pfn(pmd));
 	else
 		pud_clear(pud);
 	pmd_free_tlb(tlb, pmd, start);
@@ -392,6 +392,18 @@ void free_pgd_range(struct mmu_gather *tlb,
 	pgd = pgd_offset(tlb->mm, addr);
 	do {
 		next = pgd_addr_end(addr, end);
+		/* The shared Agent subtree survives until final pgd_free(). */
+		if (nacre_agent_slot(tlb->mm, addr))
+			continue;
+		if (tlb->mm->context.nacre_prepared) {
+			/* Sv39 folds PGD/P4D/PUD; M reads the protected root slot. */
+			pud_t entry = __pud(nacre_root_entry(tlb->mm, addr));
+
+			BUG_ON(!pud_none(entry) && pud_bad(entry));
+			if (!pud_none(entry))
+				free_pmd_range(tlb, &entry, addr, next, floor, ceiling);
+			continue;
+		}
 		if (pgd_none_or_clear_bad(pgd))
 			continue;
 		free_p4d_range(tlb, pgd, addr, next, floor, ceiling);
@@ -2150,6 +2162,16 @@ void unmap_page_range(struct mmu_gather *tlb,
 	} else {
 		do {
 			next = pgd_addr_end(addr, end);
+			if (nacre_agent_slot(vma->vm_mm, addr))
+				continue;
+			if (vma->vm_mm->context.nacre_prepared) {
+				pud_t entry = __pud(nacre_root_entry(vma->vm_mm, addr));
+
+				BUG_ON(!pud_none(entry) && pud_bad(entry));
+				if (!pud_none(entry))
+					next = zap_pmd_range(tlb, vma, &entry, addr, next, details);
+				continue;
+			}
 			if (pgd_none_or_clear_bad(pgd))
 				continue;
 			next = zap_p4d_range(tlb, vma, pgd, addr, next, details);

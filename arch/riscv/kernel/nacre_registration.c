@@ -116,6 +116,7 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 	    sbi_ret.value >= NACC_AGENT_VA_SLOT_END || (sbi_ret.value & 3))
 		panic("NACRE prepare failed: error=%ld entry=%lx",
 		      sbi_ret.error, sbi_ret.value);
+	mm->context.nacre_prepared = 1;
 	current->thread.nacre_entry = sbi_ret.value;
 	current->thread.nacre_flag = NACRE_PREPARED;
 	asm volatile(".global nacre_exec_prepared\n"
@@ -154,4 +155,24 @@ void nacre_user_return_prepare(struct pt_regs *regs)
 	if (current->thread.nacre_flag == NACRE_PREPARED)
 		BUG_ON(current->ptrace ||
 		       regs->a0 || !user_mode(regs));
+}
+
+/* do_exit still owns the service frame and mm; no return to AU is possible. */
+void nacre_exit(void)
+{
+	unsigned long flags;
+
+	if (current->thread.nacre_flag != NACRE_HANDOFF)
+		return;
+	BUG_ON(!current->mm || !current->mm->context.nacre_prepared ||
+	       !current->thread.nacre_cid);
+	local_irq_save(flags);
+	nacre_unregister_asm(current->thread.nacre_cid, current->pid,
+			     current_pt_regs());
+	current->thread.nacre_cid = 0;
+	current->thread.nacre_entry = 0;
+	current->thread.nacre_flag = NACRE_IDLE;
+	asm volatile(".global nacre_exit_cleared\nnacre_exit_cleared: nop" ::: "memory");
+	local_irq_restore(flags);
+	asm volatile(".global nacre_exit_done\nnacre_exit_done: nop" ::: "memory");
 }

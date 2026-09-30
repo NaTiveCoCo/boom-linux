@@ -8,6 +8,9 @@ struct ptdesc;
 
 bool nacre_mm_managed(struct mm_struct *mm);
 void nacre_mm_init(struct mm_struct *mm);
+void nacre_root_retire(struct mm_struct *mm);
+unsigned long nacre_root_entry(struct mm_struct *mm, unsigned long addr);
+bool nacre_agent_slot(struct mm_struct *mm, unsigned long addr);
 bool nacre_ptp_contains(const void *ptr);
 struct ptdesc *nacre_ptp_alloc(struct mm_struct *mm, unsigned int level);
 void nacre_ptp_dtor(struct ptdesc *ptdesc, unsigned long pfn,

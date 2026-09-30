@@ -8,6 +8,7 @@
 #define NACRE_CSR_ASSTATUS 0x7c2
 #define NACRE_ASSTATUS_SPA 2
 #define NACRE_AS_ECALL 24
+#define NACRE_ENTER_UNREGISTER 2
 
 #define NACRE_IDLE 0
 #define NACRE_REQUESTED 1
@@ -22,6 +23,8 @@ int nacre_exec_reserve(struct mm_struct *mm);
 void nacre_exec_prepare(struct linux_binprm *bprm);
 void __noreturn nacre_exec_handoff(void);
 void nacre_exec_cancel(void);
+void nacre_exit(void);
+void nacre_unregister_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);
 void nacre_user_return_prepare(struct pt_regs *regs);
 #endif
 #endif

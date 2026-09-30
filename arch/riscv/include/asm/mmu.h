@@ -19,6 +19,8 @@ typedef struct {
 	unsigned long nacc_state;
 	/* Exec construction ownership, independent of the legacy runtime state. */
 	unsigned long nacre_cid;
+	/* PREPARE committed a shared Agent subtree and ROOT_L0 role. */
+	unsigned long nacre_prepared;
 #ifdef CONFIG_SMP
 	/* A local icache flush is needed before user execution can resume. */
 	cpumask_t icache_stale_mask;
