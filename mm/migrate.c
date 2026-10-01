@@ -1201,6 +1201,9 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 	bool locked = false;
 	bool dst_locked = false;
 
+	if (folio_test_nacre(src))
+		return -EBUSY;
+
 	if (folio_ref_count(src) == 1) {
 		/* Folio was freed from under us. So we are done. */
 		folio_clear_active(src);
@@ -1249,6 +1252,11 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 		folio_lock(src);
 	}
 	locked = true;
+	if (folio_test_nacre(src)) {
+		rc = -EBUSY;
+		goto out;
+	}
+
 	if (folio_test_mlocked(src))
 		old_page_state |= PAGE_WAS_MLOCKED;
 

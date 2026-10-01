@@ -120,9 +120,7 @@ static inline bool nacc_thread_has_root_l0_lifecycle(void)
 
 static inline bool nacc_private_data_uaccess_active(void)
 {
-	return current->mm &&
-	       current->thread.nacc_cid &&
-	       (nacc_thread_is_inited() || nacc_mm_is_active(current->mm));
+	return current->mm && current->mm->context.nacre_private;
 }
 
 static inline bool nacc_use_secure_pt(struct mm_struct *mm)

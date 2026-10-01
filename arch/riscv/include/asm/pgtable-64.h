@@ -71,11 +71,11 @@ typedef struct {
 
 /*
  * rv64 PTE format:
- * | 63 | 62 61 | 60 55 | 54   | 53  10 | 9             8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0
- *   N      MT     RSV    NACC   PFN      reserved for SW   D   A   G   U   X   W   R   V
+ * | 63 | 62 61 | 60       54 | 53  10 | 9             8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0
+ *   N      MT     reserved     PFN      RSW category   D   A   G   U   X   W   R   V
  */
 #define _PAGE_PFN_MASK  GENMASK(53, 10)
-#define _PAGE_NACC      BIT(54)
+#define _PAGE_NACC      _PAGE_SOFT /* RSW=11; bit 54 remains reserved. */
 
 /*
  * [63] Svnapot definitions:

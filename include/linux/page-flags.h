@@ -104,6 +104,9 @@ enum pageflags {
 	PG_owner_priv_1,	/* Owner use. If pagecache, fs may use */
 	PG_owner_2,		/* Owner use. If pagecache, fs may use */
 	PG_arch_1,
+#ifdef CONFIG_RISCV
+	PG_nacre,		/* Resident protected application page. */
+#endif
 	PG_reserved,
 	PG_private,		/* If pagecache, has fs-private data */
 	PG_private_2,		/* If pagecache, has fs aux data */
@@ -505,6 +508,12 @@ static inline int TestClearPage##uname(struct page *page) { return 0; }
 
 #define TESTSCFLAG_FALSE(uname, lname)					\
 	TESTSETFLAG_FALSE(uname, lname) TESTCLEARFLAG_FALSE(uname, lname)
+
+#ifdef CONFIG_RISCV
+PAGEFLAG(Nacre, nacre, PF_NO_COMPOUND)
+#else
+TESTPAGEFLAG_FALSE(Nacre, nacre)
+#endif
 
 __PAGEFLAG(Locked, locked, PF_NO_TAIL)
 FOLIO_FLAG(waiters, FOLIO_HEAD_PAGE)

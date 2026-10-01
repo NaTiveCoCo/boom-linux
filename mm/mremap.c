@@ -1008,6 +1008,12 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 	LIST_HEAD(uf_unmap_early);
 	LIST_HEAD(uf_unmap);
 
+#ifdef CONFIG_RISCV
+	/* Moving a protected leaf requires a separate reference-preserving service. */
+	if (mm->context.nacre_private)
+		return -EOPNOTSUPP;
+#endif
+
 	/*
 	 * There is a deliberate asymmetry here: we strip the pointer tag
 	 * from the old address but leave the new address alone. This is

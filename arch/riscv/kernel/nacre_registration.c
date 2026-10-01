@@ -82,7 +82,7 @@ void nacre_exec_cancel(void)
 }
 
 /* Called by exec after the binary handler has committed mm and start_thread(). */
-void nacre_exec_prepare(struct linux_binprm *bprm)
+int nacre_exec_prepare(struct linux_binprm *bprm)
 {
 	struct mm_struct *mm = current->mm;
 	struct pt_regs *regs = current_pt_regs();
@@ -91,7 +91,7 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 	unsigned long flags;
 
 	if (current->thread.nacre_flag == NACRE_IDLE)
-		return;
+		return 0;
 	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED ||
 	       !bprm->point_of_no_return || bprm->mm || !mm ||
 	       !nacre_mm_managed(mm) || mm->context.nacre_cid != current->thread.nacre_cid ||
@@ -99,6 +99,9 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 	       !user_mode(regs) || current->ptrace);
 	/* Materialize the successful exec return value in the initial app frame. */
 	regs->a0 = 0;
+	int ret = nacre_private_prepare(mm);
+	if (ret)
+		return ret;
 	mmap_read_lock(mm);
 	asm volatile(".global nacre_exec_check_reservation\n"
 		     "nacre_exec_check_reservation: nop" ::: "memory");
@@ -123,6 +126,7 @@ void nacre_exec_prepare(struct linux_binprm *bprm)
 		     "nacre_exec_prepared: nop" ::: "memory");
 	local_irq_restore(flags);
 	mmap_read_unlock(mm);
+	return 0;
 }
 
 /* Exec has released bprm and filename before taking this continuation. */

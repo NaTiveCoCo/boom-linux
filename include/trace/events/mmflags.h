@@ -95,6 +95,12 @@
 #define IF_HAVE_PG_ARCH_3(_name)
 #endif
 
+#ifdef CONFIG_RISCV
+#define IF_HAVE_PG_NACRE(_name) ,{1UL << PG_##_name, __stringify(_name)}
+#else
+#define IF_HAVE_PG_NACRE(_name)
+#endif
+
 #define DEF_PAGEFLAG_NAME(_name) { 1UL <<  PG_##_name, __stringify(_name) }
 
 #define __def_pageflag_names						\
@@ -122,7 +128,8 @@ IF_HAVE_PG_HWPOISON(hwpoison)						\
 IF_HAVE_PG_IDLE(idle)							\
 IF_HAVE_PG_IDLE(young)							\
 IF_HAVE_PG_ARCH_2(arch_2)						\
-IF_HAVE_PG_ARCH_3(arch_3)
+IF_HAVE_PG_ARCH_3(arch_3)\
+IF_HAVE_PG_NACRE(nacre)
 
 #define show_page_flags(flags)						\
 	(flags) ? __print_flags(flags, "|",				\

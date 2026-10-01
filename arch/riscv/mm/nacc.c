@@ -8,6 +8,7 @@
 #include <linux/page_ref.h>
 #include <linux/string.h>
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 
 #include <asm/sbi.h>
 #include <asm/io.h>
@@ -115,6 +116,15 @@ bool nacc_copy_mc_user_highpage_sbi(struct page *to, struct page *from,
 	unsigned long root_pgd_pa;
 	void *caller = __builtin_return_address(0);
 
+	if (PageNacre(from) || PageNacre(to)) {
+		unsigned long left;
+		int handled;
+		BUG_ON(!vma || !nacc_private_data_uaccess_active() || vma->vm_mm != current->mm);
+		handled = nacc_private_data_copy_kernel_alias((unsigned long)page_address(to),
+			(unsigned long)page_address(from), PAGE_SIZE, (unsigned long)caller, &left);
+		BUG_ON(handled != 1 || left);
+		return true;
+	}
 	if (!vma || !vma->vm_mm || !nacc_mm_is_active(vma->vm_mm))
 		return false;
 
@@ -410,15 +420,13 @@ bool nacc_uaccess_scope_begin(enum nacc_uaccess_scope_class scope_class,
 
 	if (!current->mm || !current->mm->pgd)
 		return true;
-	if (!current->thread.nacc_cid)
-		return true;
-	if (!nacc_thread_is_inited() && !nacc_mm_is_active(current->mm))
+	if (!nacc_private_data_uaccess_active())
 		return true;
 	if (!bytes)
 		return false;
 
 	status = nacc_user_access_save_enable();
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_UACCESS_SCOPE_BEGIN,
+	ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_UACCESS_SCOPE_BEGIN,
 			scope_class, direction, user_va, bytes, 0,
 			current->pid);
 	nacc_user_access_restore(status);
@@ -446,11 +454,7 @@ int nacc_uaccess_string_read_begin(unsigned long user_va,
 
 	if (!current->mm || !current->mm->pgd)
 		return 0;
-	if (!current->thread.nacc_cid)
-		return 0;
-	if (current->thread.nacc_flag & NACC_EXEC)
-		return 0;
-	if (!nacc_thread_is_inited() && !nacc_mm_is_active(current->mm))
+	if (!nacc_private_data_uaccess_active())
 		return 0;
 	if (!bytes || !desc)
 		return -EFAULT;
@@ -458,7 +462,7 @@ int nacc_uaccess_string_read_begin(unsigned long user_va,
 		return -EFAULT;
 
 	status = nacc_user_access_save_enable();
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_UACCESS_SCOPE_BEGIN,
+	ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_UACCESS_SCOPE_BEGIN,
 			NACC_UACCESS_SCOPE_STRING_READ,
 			NACC_UACCESS_SCOPE_DIR_FROM_USER,
 			user_va, bytes, (unsigned long)desc, current->pid);
@@ -487,12 +491,10 @@ bool nacc_uaccess_scope_end(enum nacc_uaccess_scope_class scope_class,
 
 	if (!current->mm || !current->mm->pgd)
 		return true;
-	if (!current->thread.nacc_cid)
-		return true;
-	if (!nacc_thread_is_inited() && !nacc_mm_is_active(current->mm))
+	if (!nacc_private_data_uaccess_active())
 		return true;
 
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_UACCESS_SCOPE_END,
+	ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_UACCESS_SCOPE_END,
 			scope_class, direction, user_va, bytes,
 			(unsigned long)result, current->pid);
 	if (ret.error) {
@@ -510,42 +512,35 @@ bool nacc_uaccess_scope_end(enum nacc_uaccess_scope_class scope_class,
 }
 EXPORT_SYMBOL(nacc_uaccess_scope_end);
 
+static int nacc_private_data_fault_in_readable(unsigned long user_va, unsigned long bytes);
+static int nacc_private_data_fault_in_writeable(unsigned long user_va, unsigned long bytes);
+
 int nacc_private_data_get_user_read(unsigned long user_va,
-				    unsigned long bytes,
-				    unsigned long *value)
+				    unsigned long bytes, unsigned long *value)
 {
-	struct sbiret ret;
-
-	if (value)
-		*value = 0;
-
-	if (!current->mm || !current->mm->pgd)
+	unsigned long done = 0, raw = 0;
+	bool split = (user_va & (PAGE_SIZE - 1)) + bytes > PAGE_SIZE;
+	if (!nacc_private_data_uaccess_active())
 		return 0;
-	if (!current->thread.nacc_cid)
-		return 0;
-	if (!nacc_thread_is_inited() && !nacc_mm_is_active(current->mm))
-		return 0;
-	if (!value)
-		return -EFAULT;
-	if ((bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8) ||
-	    bytes > sizeof(unsigned long))
-		return 0;
-
-	ret = sbi_ecall(SBI_EXT_NACC,
-			SBI_EXT_NACC_UACCESS_PRIVATE_GET_USER_READ,
-			user_va, bytes, 0, 0, 0, 0);
-	if (!ret.error) {
-		*value = ret.value;
-		return 1;
+	BUG_ON(!value || (bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8));
+	*value = 0;
+	while (done < bytes) {
+		unsigned long chunk = split ? 1 : bytes;
+		struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+			NACRE_UACCESS_PRIVATE_GET_USER_READ, user_va + done, chunk, 0, 0, 0, 0);
+		if (ret.error == SBI_ERR_NOT_SUPPORTED &&
+		    !nacc_private_data_fault_in_readable(user_va + done, chunk))
+			ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+				NACRE_UACCESS_PRIVATE_GET_USER_READ, user_va + done, chunk, 0, 0, 0, 0);
+		if (ret.error)
+			return -EFAULT;
+		raw |= (split ? (ret.value & 0xff) : ret.value) << (8 * done);
+		done += chunk;
 	}
-
-	if (ret.error == SBI_ERR_NOT_SUPPORTED)
-		return 0;
-
-	printk_ratelimited(KERN_ERR "[NACC][private-get-user-read-denied] pid=%d comm=%s cid=%lx user_va=%lx bytes=%lu err=%ld val=%ld\n",
-			   current->pid, current->comm, current->thread.nacc_cid,
-			   user_va, bytes, ret.error, ret.value);
-	return -EFAULT;
+	/* Match lb/lh/lw sign extension before the caller's C conversion. */
+	*value = bytes == 1 ? (long)(s8)raw : bytes == 2 ? (long)(s16)raw :
+		 bytes == 4 ? (long)(s32)raw : raw;
+	return 1;
 }
 EXPORT_SYMBOL(nacc_private_data_get_user_read);
 
@@ -555,6 +550,8 @@ static int nacc_private_data_fault_in_writeable(unsigned long user_va,
 	unsigned long status;
 	size_t left;
 
+	if (pagefault_disabled() || in_atomic())
+		return -EFAULT;
 	status = csr_read(CSR_STATUS);
 	if (status & SR_SUM)
 		csr_clear(CSR_STATUS, SR_SUM);
@@ -576,7 +573,7 @@ static int nacc_private_data_fault_in_readable(unsigned long user_va,
 	bool unlocked = false;
 	int ret = 0;
 
-	if (!mm)
+	if (!mm || pagefault_disabled() || in_atomic())
 		return -EFAULT;
 	if (!bytes)
 		return 0;
@@ -598,54 +595,31 @@ static int nacc_private_data_fault_in_readable(unsigned long user_va,
 }
 
 int nacc_private_data_put_user_write(unsigned long user_va,
-				     const void *value,
-				     unsigned long bytes)
+				     const void *value, unsigned long bytes)
 {
-	struct sbiret ret;
-	bool cow_retried = false;
+	unsigned long done = 0;
+	bool split = (user_va & (PAGE_SIZE - 1)) + bytes > PAGE_SIZE;
 	u64 raw = 0;
-
-	if (!current->mm || !current->mm->pgd)
-		return 0;
 	if (!nacc_private_data_uaccess_active())
 		return 0;
-	if (!value)
-		return -EFAULT;
-	if (bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8)
-		return 0;
-
+	BUG_ON(!value || (bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8));
 	memcpy(&raw, value, bytes);
-retry:
-	ret = sbi_ecall(SBI_EXT_NACC,
-			SBI_EXT_NACC_UACCESS_PRIVATE_PUT_USER_WRITE,
-			user_va, (unsigned long)raw,
-			(unsigned long)(raw >> 32), bytes, 0,
-			current->pid);
-	if (!ret.error)
-		return 1;
-	/* NaCC uses DENIED_LOCKED as private put_user COW-needed. */
-	if (ret.error == SBI_ERR_DENIED_LOCKED && !cow_retried) {
-		int fault_ret;
-
-		cow_retried = true;
-		fault_ret = nacc_private_data_fault_in_writeable(user_va,
-								 bytes);
-		if (!fault_ret)
-			goto retry;
-
-		printk_ratelimited(KERN_ERR "[NACC][private-put-user-cow-failed] pid=%d comm=%s cid=%lx user_va=%lx bytes=%lu err=%d\n",
-				   current->pid, current->comm,
-				   current->thread.nacc_cid, user_va, bytes,
-				   fault_ret);
-		return -EFAULT;
+	while (done < bytes) {
+		unsigned long chunk = split ? 1 : bytes;
+		u64 part = raw >> (8 * done);
+		struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+			NACRE_UACCESS_PRIVATE_PUT_USER_WRITE, user_va + done,
+			part, part >> 32, chunk, 0, current->pid);
+		if ((ret.error == SBI_ERR_NOT_SUPPORTED || ret.error == SBI_ERR_DENIED_LOCKED) &&
+		    !nacc_private_data_fault_in_writeable(user_va + done, chunk))
+			ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+				NACRE_UACCESS_PRIVATE_PUT_USER_WRITE, user_va + done,
+				part, part >> 32, chunk, 0, current->pid);
+		if (ret.error)
+			return -EFAULT;
+		done += chunk;
 	}
-	if (ret.error == SBI_ERR_NOT_SUPPORTED)
-		return 0;
-
-	printk_ratelimited(KERN_ERR "[NACC][private-put-user-write-denied] pid=%d comm=%s cid=%lx user_va=%lx bytes=%lu err=%ld val=%ld\n",
-			   current->pid, current->comm, current->thread.nacc_cid,
-			   user_va, bytes, ret.error, ret.value);
-	return -EFAULT;
+	return 1;
 }
 EXPORT_SYMBOL(nacc_private_data_put_user_write);
 
@@ -687,8 +661,8 @@ int nacc_private_data_copy_to_user(unsigned long user_va,
 			chunk = page_left;
 
 retry:
-		ret = sbi_ecall(SBI_EXT_NACC,
-				SBI_EXT_NACC_UACCESS_PRIVATE_COPY_TO_USER,
+		ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+				NACRE_UACCESS_PRIVATE_COPY_TO_USER,
 				dst, src, chunk, caller_pc, current->pid, 0);
 		if ((ret.error == SBI_ERR_NOT_SUPPORTED ||
 		     ret.error == SBI_ERR_DENIED_LOCKED) &&
@@ -709,17 +683,6 @@ retry:
 					   fault_ret);
 			*left = bytes - copied;
 			return copied ? 1 : -EFAULT;
-		}
-		if (ret.error == SBI_ERR_NOT_SUPPORTED) {
-			/*
-			 * After one successful write-prefault, preserve the
-			 * existing fallback contract for non-private/unhandled
-			 * destinations.
-			 */
-			if (!copied)
-				return 0;
-			*left = bytes - copied;
-			return 1;
 		}
 		if (ret.error) {
 			printk_ratelimited(KERN_ERR "[NACC][private-copy-to-user-denied] pid=%d comm=%s cid=%lx user_va=%lx kernel_va=%lx bytes=%lu copied=%lu err=%ld val=%ld\n",
@@ -786,8 +749,8 @@ int nacc_private_data_copy_from_user(unsigned long kernel_va,
 			chunk = page_left;
 
 	retry:
-		ret = sbi_ecall(SBI_EXT_NACC,
-				SBI_EXT_NACC_UACCESS_PRIVATE_COPY_FROM_USER,
+		ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+				NACRE_UACCESS_PRIVATE_COPY_FROM_USER,
 				src, dst, chunk, caller_pc, current->pid, 0);
 		if (ret.error == SBI_ERR_NOT_SUPPORTED &&
 		    !read_fault_retried) {
@@ -810,12 +773,6 @@ int nacc_private_data_copy_from_user(unsigned long kernel_va,
 					   chunk, copied, fault_ret);
 			*left = bytes - copied;
 			return copied ? 1 : -EFAULT;
-		}
-		if (ret.error == SBI_ERR_NOT_SUPPORTED) {
-			if (!copied)
-				return 0;
-			*left = bytes - copied;
-			return 1;
 		}
 		if (ret.error) {
 			printk_ratelimited(KERN_ERR "[NACC][private-copy-from-user-denied] pid=%d comm=%s cid=%lx kernel_va=%lx user_va=%lx bytes=%lu copied=%lu err=%ld val=%ld\n",
@@ -865,6 +822,9 @@ int nacc_private_data_copy_kernel_alias(unsigned long destination_kernel_va,
 		*left = 0;
 		return 1;
 	}
+	if (bytes > ULONG_MAX - destination_kernel_va ||
+	    bytes > ULONG_MAX - source_kernel_va)
+		return -EFAULT;
 
 	while (copied < bytes) {
 		unsigned long dst = destination_kernel_va + copied;
@@ -883,16 +843,16 @@ int nacc_private_data_copy_kernel_alias(unsigned long destination_kernel_va,
 
 		status = nacc_user_access_save_enable();
 		ret = sbi_ecall(
-			SBI_EXT_NACC,
-			SBI_EXT_NACC_UACCESS_PRIVATE_COPY_KERNEL_ALIAS,
+			NACRE_SBI_REGISTER_EXT,
+			NACRE_UACCESS_PRIVATE_COPY_KERNEL_ALIAS,
 			src, dst, chunk, caller_pc, current->pid, 0);
 		nacc_user_access_restore(status);
 
 		if (ret.error == SBI_ERR_NOT_SUPPORTED) {
-			if (!copied)
-				return 0;
-			*left = bytes - copied;
-			return 1;
+			/* M checked both mappings and tags for this chunk only. */
+			memcpy((void *)dst, (const void *)src, chunk);
+			copied += chunk;
+			continue;
 		}
 		if (ret.error) {
 			printk_ratelimited(KERN_ERR "[NACC][private-kernel-alias-copy-denied] pid=%d comm=%s cid=%lx dst=%lx src=%lx bytes=%lu copied=%lu err=%ld val=%ld\n",
@@ -948,25 +908,26 @@ int nacc_private_data_clear_user(unsigned long user_va,
 		unsigned long page_left;
 		unsigned long status;
 		struct sbiret ret;
+		bool retried = false;
 
 		page_left = PAGE_SIZE - (dst & (PAGE_SIZE - 1));
 		if (chunk > page_left)
 			chunk = page_left;
 
+retry:
 		status = csr_read(CSR_STATUS);
 		if (!(status & SR_SUM))
 			csr_set(CSR_STATUS, SR_SUM);
-		ret = sbi_ecall(SBI_EXT_NACC,
-				SBI_EXT_NACC_UACCESS_PRIVATE_CLEAR_USER,
+		ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+				NACRE_UACCESS_PRIVATE_CLEAR_USER,
 				dst, chunk, caller_pc, current->pid, 0, 0);
 		if (!(status & SR_SUM))
 			csr_clear(CSR_STATUS, SR_SUM);
 
-		if (ret.error == SBI_ERR_NOT_SUPPORTED) {
-			if (!cleared)
-				return 0;
-			*left = bytes - cleared;
-			return 1;
+		if ((ret.error == SBI_ERR_NOT_SUPPORTED || ret.error == SBI_ERR_DENIED_LOCKED) && !retried) {
+			retried = true;
+			if (!nacc_private_data_fault_in_writeable(dst, chunk))
+				goto retry;
 		}
 		if (ret.error) {
 			printk_ratelimited(KERN_ERR "[NACC][private-clear-user-denied] pid=%d comm=%s cid=%lx user_va=%lx bytes=%lu cleared=%lu err=%ld val=%ld\n",
@@ -1001,7 +962,7 @@ void pgtbl_debug(unsigned long pgd)
     struct sbiret ret;
 
     nacc_debug("[Linux]: calling pgtbl_debug SBI call pgd=%lx\n", pgd);
-    ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_LINUX_DEBUG,
+    ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, SBI_EXT_LINUX_DEBUG,
                     pgd, 0,
                     0, 0, 0, 0);
     nacc_debug("[Linux]: pgtbl_debug SBI returned error=%ld value=%ld\n",

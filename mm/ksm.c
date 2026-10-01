@@ -15,6 +15,9 @@
 
 #include <linux/errno.h>
 #include <linux/mm.h>
+#ifdef CONFIG_RISCV
+#include <asm/nacre_ptp.h>
+#endif
 #include <linux/mm_inline.h>
 #include <linux/fs.h>
 #include <linux/mman.h>
@@ -2827,6 +2830,10 @@ int ksm_madvise(struct vm_area_struct *vma, unsigned long start,
 
 	switch (advice) {
 	case MADV_MERGEABLE:
+#ifdef CONFIG_RISCV
+		if (nacre_mm_private(mm))
+			return -EOPNOTSUPP;
+#endif
 		if (vma->vm_flags & VM_MERGEABLE)
 			return 0;
 		if (!vma_ksm_compatible(vma))

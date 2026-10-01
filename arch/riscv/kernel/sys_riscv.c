@@ -9,6 +9,7 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/mman.h>
 #include <linux/sched/signal.h>
 #include <asm/cacheflush.h>
 
@@ -17,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 #include <asm/page.h>
 #include <asm/processor.h>
 
@@ -242,6 +244,10 @@ static long riscv_sys_mmap(unsigned long addr, unsigned long len,
 			   unsigned long page_shift_offset)
 {
 	long ret;
+
+	if (nacc_private_data_uaccess_active() &&
+	    (flags & (MAP_SHARED | MAP_HUGETLB)))
+		return -EOPNOTSUPP;
 
 	nacc_log_sys_mmap("riscv_sys_mmap: enter", addr, len, prot, flags, fd,
 			  offset, page_shift_offset, 0);
@@ -625,12 +631,12 @@ int nacc_record_vvar_sbi(unsigned long root_pgd_pa, unsigned long addr,
 {
 	struct sbiret ret;
 
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_RECORD_VVAR,
+	ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 14,
 			root_pgd_pa, addr, pfn, 0, 0, 0);
 	if (ret.error) {
 		printk(KERN_ERR "[Linux]: nacc_record_vvar_sbi failed: root=%lx addr=%lx pfn=%lx err=%ld val=%ld\n",
 		       root_pgd_pa, addr, pfn, ret.error, ret.value);
-		return -EIO;
+		return ret.error == SBI_ERR_NO_SHMEM ? -ENOMEM : -EIO;
 	}
 
 	nacc_debug("[Linux]: nacc_record_vvar_sbi ok: root=%lx addr=%lx pfn=%lx val=%ld\n",
@@ -643,13 +649,13 @@ int nacc_adopt_vdso_sbi(unsigned long root_pgd_pa, unsigned long addr,
 {
 	struct sbiret ret;
 
-	ret = sbi_ecall(SBI_EXT_NACC, SBI_EXT_NACC_ADOPT_VDSO,
+	ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 15,
 			root_pgd_pa, addr, nr_pages, source_pfns_pa, 0, 0);
 	if (ret.error) {
 		printk(KERN_ERR "[Linux]: nacc_adopt_vdso_sbi failed: root=%lx addr=%lx nr_pages=%lx pfns_pa=%lx err=%ld val=%ld\n",
 		       root_pgd_pa, addr, nr_pages, source_pfns_pa,
 		       ret.error, ret.value);
-		return -EIO;
+		return ret.error == SBI_ERR_NO_SHMEM ? -ENOMEM : -EIO;
 	}
 
 	return 0;

@@ -18,6 +18,16 @@
 #include <asm/nacc.h>
 #endif
 
+/* A private page held by an async/foreign-mm caller has no current-root authority. */
+static inline bool nacre_page_copy_allowed(struct page *page)
+{
+#if defined(CONFIG_RISCV) && defined(NACC)
+	return !PageNacre(page) || nacc_private_data_uaccess_active();
+#else
+	return true;
+#endif
+}
+
 static __always_inline
 size_t copy_to_user_iter(void __user *iter_to, size_t progress,
 			 size_t len, void *from, void *priv2)
@@ -90,6 +100,16 @@ static __always_inline
 size_t memcpy_from_iter(void *iter_from, size_t progress,
 			size_t len, void *to, void *priv2)
 {
+#if defined(CONFIG_RISCV) && defined(NACC)
+	if (nacc_private_data_uaccess_active()) {
+		size_t left = len;
+		int ret = nacc_private_data_copy_kernel_alias(
+			(unsigned long)(to + progress), (unsigned long)iter_from,
+			len, _RET_IP_, &left);
+		if (ret)
+			return ret > 0 ? left : len;
+	}
+#endif
 	memcpy(to + progress, iter_from, len);
 	return 0;
 }
@@ -370,7 +390,7 @@ size_t copy_page_to_iter(struct page *page, size_t offset, size_t bytes,
 			 struct iov_iter *i)
 {
 	size_t res = 0;
-	if (!page_copy_sane(page, offset, bytes))
+	if (!page_copy_sane(page, offset, bytes) || !nacre_page_copy_allowed(page))
 		return 0;
 	if (WARN_ON_ONCE(i->data_source))
 		return 0;
@@ -400,7 +420,7 @@ size_t copy_page_to_iter_nofault(struct page *page, unsigned offset, size_t byte
 {
 	size_t res = 0;
 
-	if (!page_copy_sane(page, offset, bytes))
+	if (!page_copy_sane(page, offset, bytes) || !nacre_page_copy_allowed(page))
 		return 0;
 	if (WARN_ON_ONCE(i->data_source))
 		return 0;
@@ -432,7 +452,7 @@ size_t copy_page_from_iter(struct page *page, size_t offset, size_t bytes,
 			 struct iov_iter *i)
 {
 	size_t res = 0;
-	if (!page_copy_sane(page, offset, bytes))
+	if (!page_copy_sane(page, offset, bytes) || !nacre_page_copy_allowed(page))
 		return 0;
 	page += offset / PAGE_SIZE; // first subpage
 	offset %= PAGE_SIZE;
@@ -466,6 +486,26 @@ static __always_inline
 size_t zero_to_iter(void *iter_to, size_t progress,
 		    size_t len, void *priv, void *priv2)
 {
+#if defined(CONFIG_RISCV) && defined(NACC)
+	static const char zero[PAGE_SIZE] __aligned(PAGE_SIZE);
+	size_t done = 0;
+	if (nacc_private_data_uaccess_active()) {
+		while (done < len) {
+			size_t chunk = min_t(size_t, len - done, PAGE_SIZE), left = chunk;
+			int ret = nacc_private_data_copy_kernel_alias(
+				(unsigned long)iter_to + done, (unsigned long)zero,
+				chunk, _RET_IP_, &left);
+			if (ret < 0)
+				return len - done;
+			if (!ret)
+				memset(iter_to + done, 0, chunk);
+			else if (left)
+				return len - done - (chunk - left);
+			done += chunk;
+		}
+		return 0;
+	}
+#endif
 	memset(iter_to, 0, len);
 	return 0;
 }
@@ -484,7 +524,7 @@ size_t copy_page_from_iter_atomic(struct page *page, size_t offset,
 	bool uses_kmap = IS_ENABLED(CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP) ||
 			 PageHighMem(page);
 
-	if (!page_copy_sane(page, offset, bytes))
+	if (!page_copy_sane(page, offset, bytes) || !nacre_page_copy_allowed(page))
 		return 0;
 	if (WARN_ON_ONCE(!i->data_source))
 		return 0;

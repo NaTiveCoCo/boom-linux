@@ -15,6 +15,7 @@
 #include <asm/pgtable.h>
 #include <asm/vdso.h>
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 #include <asm/tlbflush.h>
 #include <linux/time_namespace.h>
 #include <vdso/datapage.h>
@@ -154,7 +155,7 @@ int nacc_adopt_vdso_text(struct vm_area_struct *vma)
 		return nacc_vdso_adopt_fail(vma, -EINVAL, "missing-vma-mm", 0);
 
 	mm = vma->vm_mm;
-	if (!nacc_use_secure_pt(mm))
+	if (!nacre_mm_private(mm))
 		return 0;
 
 	info = nacc_vdso_info_for_text_vma(vma);
@@ -239,7 +240,7 @@ out_free:
 static int vdso_mremap(const struct vm_special_mapping *sm,
 		       struct vm_area_struct *new_vma)
 {
-	if (nacc_use_secure_pt(current->mm))
+	if (nacre_mm_private(current->mm))
 		return -EPERM;
 
 	current->mm->context.vdso = (void *)new_vma->vm_start;
@@ -316,8 +317,6 @@ static vm_fault_t vvar_fault(const struct vm_special_mapping *sm,
 {
 	struct page *timens_page = find_timens_vvar_page(vma);
 	unsigned long pfn;
-	bool secure;
-	int ret;
 
 	switch (vmf->pgoff) {
 	case VVAR_DATA_PAGE_OFFSET:
@@ -344,14 +343,6 @@ static vm_fault_t vvar_fault(const struct vm_special_mapping *sm,
 		return VM_FAULT_SIGBUS;
 	}
 
-	secure = vma->vm_mm && nacc_use_secure_pt(vma->vm_mm);
-	if (secure) {
-		ret = nacc_record_vvar_sbi(__pa(vma->vm_mm->pgd),
-					   vmf->address, pfn);
-		if (ret)
-			return VM_FAULT_SIGBUS;
-	}
-
 	return vmf_insert_pfn(vma, vmf->address, pfn);
 }
 
@@ -362,7 +353,7 @@ static vm_fault_t vdso_fault(const struct vm_special_mapping *sm,
 	struct page **pages;
 	int ret;
 
-	if (vma->vm_mm && nacc_use_secure_pt(vma->vm_mm)) {
+	if (vma->vm_mm && nacre_mm_private(vma->vm_mm)) {
 		nacc_debug("[NACC][vdso-fault] enter pid=%d comm=%s mm=%px root=%lx addr=%lx pgoff=%lx vma=[%lx,%lx) flags=%lx mixed=%d pfnmap=%d\n",
 			   current->pid, current->comm, vma->vm_mm,
 			   __pa(vma->vm_mm->pgd), vmf->address, vmf->pgoff,

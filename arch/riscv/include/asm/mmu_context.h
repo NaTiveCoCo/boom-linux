@@ -29,6 +29,7 @@ static inline int init_new_context(struct task_struct *tsk,
 {
 	mm->context.nacre_cid = 0;
 	mm->context.nacre_prepared = 0;
+	mm->context.nacre_private = 0;
 #ifdef CONFIG_MMU
 	atomic_long_set(&mm->context.id, 0);
 #endif

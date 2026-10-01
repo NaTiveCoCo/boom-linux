@@ -410,13 +410,20 @@ static inline int pte_young(pte_t pte)
 
 static inline int pte_special(pte_t pte)
 {
-	return pte_val(pte) & _PAGE_SPECIAL;
+	return pte_present(pte) &&
+	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_SPECIAL;
 }
 
 static inline bool pte_nacc(pte_t pte)
 {
 #ifdef CONFIG_64BIT
-	return pte_val(pte) & _PAGE_NACC;
+	/* Swap/migration and valid nonleaf encodings are not private leaves. */
+	return !(pte_val(pte) >> 54) &&
+	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_NACC &&
+	       (((pte_val(pte) & _PAGE_PRESENT) &&
+	         (pte_val(pte) & _PAGE_LEAF)) ||
+	        (!(pte_val(pte) & _PAGE_PRESENT) &&
+	         (pte_val(pte) & _PAGE_PROT_NONE)));
 #else
 	return 0;
 #endif
@@ -425,7 +432,7 @@ static inline bool pte_nacc(pte_t pte)
 static inline pte_t pte_mknacc(pte_t pte)
 {
 #ifdef CONFIG_64BIT
-	return __pte(pte_val(pte) | _PAGE_NACC);
+	return __pte((pte_val(pte) & ~_PAGE_SOFT) | _PAGE_NACC);
 #else
 	return pte;
 #endif
@@ -434,7 +441,8 @@ static inline pte_t pte_mknacc(pte_t pte)
 #ifdef CONFIG_ARCH_HAS_PTE_DEVMAP
 static inline int pte_devmap(pte_t pte)
 {
-	return pte_val(pte) & _PAGE_DEVMAP;
+	return pte_present(pte) &&
+	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_DEVMAP;
 }
 #endif
 
@@ -476,12 +484,12 @@ static inline pte_t pte_mkold(pte_t pte)
 
 static inline pte_t pte_mkspecial(pte_t pte)
 {
-	return __pte(pte_val(pte) | _PAGE_SPECIAL);
+	return __pte((pte_val(pte) & ~_PAGE_SOFT) | _PAGE_SPECIAL);
 }
 
 static inline pte_t pte_mkdevmap(pte_t pte)
 {
-	return __pte(pte_val(pte) | _PAGE_DEVMAP);
+	return __pte((pte_val(pte) & ~_PAGE_SOFT) | _PAGE_DEVMAP);
 }
 
 static inline pte_t pte_mkhuge(pte_t pte)
@@ -639,6 +647,23 @@ static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
 	page_table_check_pte_clear(mm, pte);
 
 	return pte;
+}
+
+/* M presets A/D, so no hardware PTE writer races this locked transaction. */
+#define __HAVE_ARCH_PTEP_MODIFY_PROT_TRANSACTION
+static inline pte_t ptep_modify_prot_start(struct vm_area_struct *vma,
+                                          unsigned long addr, pte_t *ptep)
+{
+	if (nacre_ptp_contains(ptep))
+		return READ_ONCE(*ptep);
+	return ptep_get_and_clear(vma->vm_mm, addr, ptep);
+}
+
+static inline void ptep_modify_prot_commit(struct vm_area_struct *vma,
+                                           unsigned long addr, pte_t *ptep,
+                                           pte_t old_pte, pte_t pte)
+{
+	set_ptes(vma->vm_mm, addr, ptep, pte, 1);
 }
 
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT

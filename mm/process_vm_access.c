@@ -7,6 +7,9 @@
 
 #include <linux/compat.h>
 #include <linux/mm.h>
+#ifdef CONFIG_RISCV
+#include <asm/nacre_ptp.h>
+#endif
 #include <linux/uio.h>
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
@@ -211,6 +214,15 @@ static ssize_t process_vm_rw_core(pid_t pid, struct iov_iter *iter,
 			rc = -EPERM;
 		goto put_task_struct;
 	}
+
+#ifdef CONFIG_RISCV
+	/* Remote GUP aliases cannot bypass the explicit current-root uaccess path. */
+	if (nacre_mm_private(mm)) {
+		mmput(mm);
+		rc = -EACCES;
+		goto put_task_struct;
+	}
+#endif
 
 	for (i = 0; i < riovcnt && iov_iter_count(iter) && !rc; i++)
 		rc = process_vm_rw_single_vec(

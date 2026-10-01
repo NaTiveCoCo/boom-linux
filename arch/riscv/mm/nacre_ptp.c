@@ -38,6 +38,11 @@ static unsigned long checked(unsigned long fid, unsigned long root,
 	return ret.value;
 }
 
+bool nacre_mm_private(struct mm_struct *mm)
+{
+	return mm && mm->context.nacre_private;
+}
+
 bool nacre_mm_managed(struct mm_struct *mm)
 {
 	return mm && mm->context.nacre_cid;
@@ -80,7 +85,7 @@ struct ptdesc *nacre_ptp_alloc(struct mm_struct *mm, unsigned int level)
 	struct sbiret ret;
 	struct ptdesc *ptdesc;
 	BUG_ON(!nacre_mm_managed(mm) || level > 1);
-	ret = call(PTP_ALLOC, __pa(mm->pgd), level, 0, 0);
+	ret = call(PTP_ALLOC, __pa(mm->pgd), level, mm->context.nacre_cid, 0);
 	if (ret.error == PTP_ENOMEM)
 		return NULL;
 	if (ret.error)
@@ -157,7 +162,15 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 {
 	struct mm_struct *mm = virt_to_ptdesc(slot)->pt_mm;
 	BUG_ON(!nacre_ptp_contains(slot) || !nacre_mm_managed(mm));
-	return checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
+	unsigned long old = checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
+	if (!op && !value && pte_nacc(__pte(old))) {
+		struct page *page = pfn_to_page(pte_pfn(__pte(old)));
+		BUG_ON(!PageNacre(page));
+		ClearPageNacre(page);
+		/* M has revoked, fenced, scrubbed, and restored NORMAL synchronously. */
+		put_page(page);
+	}
+	return old;
 }
 
 /* Test the root slot, not a VMA identity: free_pgtables may merge ranges. */

@@ -54,6 +54,7 @@
 #include <asm/mmu_context.h>
 
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/mmap.h>
@@ -315,6 +316,11 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 	if (!len)
 		return -EINVAL;
+
+	/* Cover kernel mapping callers too, including SysV shmat and hugetlb files. */
+	if (nacre_mm_private(mm) &&
+	    ((flags & (MAP_SHARED | MAP_HUGETLB)) || (file && is_file_hugepages(file))))
+		return -EOPNOTSUPP;
 
 	/*
 	 * Does the application expect PROT_READ to imply PROT_EXEC?

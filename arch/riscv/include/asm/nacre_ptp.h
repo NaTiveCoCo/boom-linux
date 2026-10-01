@@ -5,7 +5,15 @@
 #include <linux/types.h>
 struct mm_struct;
 struct ptdesc;
+struct page;
+int nacre_private_prepare(struct mm_struct *mm);
+int nacre_protnone_reserve(struct mm_struct *mm, unsigned long start, unsigned long end);
+void nacre_protnone_finish(struct mm_struct *mm, unsigned long start,
+			   unsigned long end, bool abort);
+void nacre_private_claim(struct mm_struct *mm, void *slot, unsigned long value,
+                         unsigned long source, unsigned long op);
 
+bool nacre_mm_private(struct mm_struct *mm);
 bool nacre_mm_managed(struct mm_struct *mm);
 void nacre_mm_init(struct mm_struct *mm);
 void nacre_root_retire(struct mm_struct *mm);

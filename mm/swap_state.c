@@ -185,6 +185,9 @@ bool add_to_swap(struct folio *folio)
 	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
 	VM_BUG_ON_FOLIO(!folio_test_uptodate(folio), folio);
 
+	if (folio_test_nacre(folio))
+		return false;
+
 	entry = folio_alloc_swap(folio);
 	if (!entry.val)
 		return false;

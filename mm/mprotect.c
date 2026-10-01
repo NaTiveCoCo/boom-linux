@@ -36,6 +36,7 @@
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
 
@@ -608,30 +609,6 @@ static const struct mm_walk_ops prot_none_walk_ops = {
 	.walk_lock		= PGWALK_WRLOCK,
 };
 
-static bool nacc_mprotect_private_protnone_unsupported(
-		struct vm_area_struct *vma, unsigned long start,
-		unsigned long end, unsigned long newflags)
-{
-	unsigned long protected_end;
-
-	if (newflags & VM_ACCESS_FLAGS)
-		return false;
-	if (!vma || !vma->vm_mm || !nacc_mm_is_active(vma->vm_mm))
-		return false;
-	if (!(vma->vm_flags & VM_NACC_APP) ||
-	    (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP)))
-		return false;
-	if (vma->vm_flags & (VM_SHARED | VM_MAYSHARE))
-		return false;
-	if (!vma_is_anonymous(vma))
-		return false;
-	if (end <= start)
-		return false;
-
-	protected_end = min_t(unsigned long, TASK_SIZE,
-			      NACC_USER_VPN2_PROTECTED_END);
-	return start < protected_end;
-}
 
 int
 mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
@@ -643,6 +620,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	long nrpages = (end - start) >> PAGE_SHIFT;
 	unsigned int mm_cp_flags = 0;
 	unsigned long charged = 0;
+	bool semantic_reserved = false;
 	int error;
 
 	if (!can_modify_vma(vma))
@@ -653,12 +631,11 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 		return 0;
 	}
 
-	if (nacc_mprotect_private_protnone_unsupported(vma, start, end,
-						       newflags)) {
-		nacc_debug_ratelimited("[Linux]: rejecting unsupported NaCC private PROT_NONE mprotect mm=%px range=[%lx,%lx) flags old=%lx new=%lx\n",
-				       mm, start, end, oldflags, newflags);
+	/* Immutable vDSO and public read-only vvar keep their ABI permissions. */
+	if (nacre_mm_private(mm) &&
+	    (nacc_vma_is_vdso_text(vma) || nacc_vma_is_vvar_abi_data(vma)) &&
+	    ((newflags ^ oldflags) & VM_ACCESS_FLAGS))
 		return -EACCES;
-	}
 
 	/*
 	 * Do PROT_NONE PFN permission checks here when we can still
@@ -702,6 +679,13 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 		newflags &= ~VM_ACCOUNT;
 	}
 
+	if (nacre_mm_private(mm) && !(newflags & VM_ACCESS_FLAGS)) {
+		error = nacre_protnone_reserve(mm, start, end);
+		if (error)
+			goto fail;
+		semantic_reserved = true;
+	}
+
 	vma = vma_modify_flags(vmi, *pprev, vma, start, end, newflags);
 	if (IS_ERR(vma)) {
 		error = PTR_ERR(vma);
@@ -721,6 +705,8 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	vma_set_page_prot(vma);
 
 	change_protection(tlb, vma, start, end, mm_cp_flags);
+	if (semantic_reserved)
+		nacre_protnone_finish(mm, start, end, false);
 
 	if ((oldflags & VM_ACCOUNT) && !(newflags & VM_ACCOUNT))
 		vm_unacct_memory(nrpages);
@@ -740,6 +726,8 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	return 0;
 
 fail:
+	if (semantic_reserved)
+		nacre_protnone_finish(mm, start, end, true);
 	vm_unacct_memory(charged);
 	return error;
 }

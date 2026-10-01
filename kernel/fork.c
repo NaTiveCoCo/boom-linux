@@ -115,6 +115,7 @@
 
 #ifdef NACC
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 #include <asm/sbi.h>
 #endif
 
@@ -2768,6 +2769,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	pid_t nr;
 #ifdef NACC
 	pid_t nacc_nr;
+
+	if (current->thread.nacre_flag == NACRE_HANDOFF)
+		return -EOPNOTSUPP;
 #endif
 
 	/*

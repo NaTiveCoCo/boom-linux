@@ -1949,7 +1949,9 @@ static int bprm_execve(struct linux_binprm *bprm)
 	task_numa_free(current, false);
 #ifdef CONFIG_RISCV
 	/* The binary handler has committed mm and established the application frame. */
-	nacre_exec_prepare(bprm);
+	retval = nacre_exec_prepare(bprm);
+	if (retval)
+		goto out;
 #endif
 #ifdef NACC
 	if (current->thread.nacc_flag == NACC_PREPARE) {
@@ -1993,6 +1995,14 @@ static int do_execveat_common(int fd, struct filename *filename,
 	struct linux_binprm *bprm;
 	int retval;
 
+#ifdef CONFIG_RISCV
+	/* Preserve the running AU address space until reexec has a lifecycle. */
+	if (current->thread.nacre_flag == NACRE_HANDOFF) {
+		if (!IS_ERR(filename))
+			putname(filename);
+		return -EOPNOTSUPP;
+	}
+#endif
 	if (IS_ERR(filename)) {
 		retval = PTR_ERR(filename);
 		goto out;

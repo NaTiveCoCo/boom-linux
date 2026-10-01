@@ -1632,12 +1632,11 @@ static bool nacc_should_install_private_leaf(struct vm_area_struct *vma,
 {
 	if (!vma || !vma->vm_mm)
 		return false;
-	if (!nacc_mm_is_active(vma->vm_mm))
+	if (!nacre_mm_private(vma->vm_mm))
 		return false;
 	if (!nacc_addr_in_protected_user_leaf_range(addr))
 		return false;
-	if (!(vma->vm_flags & VM_NACC_APP) ||
-	    (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP)))
+	if (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return false;
 	if (vma->vm_flags & (VM_SHARED | VM_MAYSHARE))
 		return false;
@@ -1660,15 +1659,13 @@ static bool nacc_should_import_file_leaf(struct vm_area_struct *vma,
 		return false;
 	if (is_cow || nr_pages != 1)
 		return false;
-	if (!nacc_mm_is_active(vma->vm_mm))
+	if (!nacre_mm_private(vma->vm_mm))
 		return false;
 	if (!nacc_addr_in_protected_user_leaf_range(addr))
 		return false;
 	/*
-	 * VM_NACC_APP is intentionally an anonymous-private VMA marker.
-	 * File-backed private text/read-only leaves are not marked with it, but
-	 * an attached NaCC root must still import them into private PFNs instead
-	 * of publishing the raw page-cache PFN.
+	 * Import all ordinary MAP_PRIVATE file leaves, including VMAs created
+	 * after exec that do not carry the construction bookkeeping marker.
 	 */
 	if (vma->vm_flags & (VM_NACC | VM_PFNMAP | VM_MIXEDMAP |
 			     VM_SHARED | VM_MAYSHARE))
@@ -1697,10 +1694,13 @@ static bool nacc_remote_vm_has_private_pte(struct mm_struct *mm,
 	pte_t pte;
 	bool private = false;
 
-	if (!nacc_should_install_private_leaf(vma, addr))
+	if (!nacre_mm_private(mm) || !nacc_addr_in_protected_user_leaf_range(addr))
 		return false;
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return false;
+	/* Foreign private mms are denied before touching their protected root. */
+	if (mm != current->mm)
+		return true;
 
 	pgd = pgd_offset(mm, addr);
 	if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
@@ -1779,7 +1779,7 @@ static struct page *nacc_private_leaf_page(struct mm_struct *mm,
 {
 	unsigned long pfn;
 
-	if (!nacc_mm_is_active(mm))
+	if (!nacre_mm_private(mm))
 		return NULL;
 	if (!nacc_addr_in_protected_user_leaf_range(addr))
 		return NULL;
@@ -1896,7 +1896,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 	init_rss_vec(rss);
-	if (nacc_mm_is_active(mm)) {
+	if (nacre_mm_private(mm)) {
 		nacc_debug("zap_pte_range: start\n");
         nacc_debug("addr: %lx end: %lx\n", addr, end);
     }
@@ -2002,7 +2002,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	if (force_flush)
 		tlb_flush_mmu(tlb);
 
-	if (nacc_mm_is_active(mm))
+	if (nacre_mm_private(mm))
 		nacc_debug("zap_pte_range: end\n");
 	return addr;
 }
@@ -2558,6 +2558,9 @@ int vm_insert_pages(struct vm_area_struct *vma, unsigned long addr,
 {
 	const unsigned long end_addr = addr + (*num * PAGE_SIZE) - 1;
 
+	if (nacre_mm_private(vma->vm_mm))
+		return -EOPNOTSUPP;
+
 	if (addr < vma->vm_start || end_addr >= vma->vm_end)
 		return -EFAULT;
 	if (!(vma->vm_flags & VM_MIXEDMAP)) {
@@ -2603,6 +2606,8 @@ EXPORT_SYMBOL(vm_insert_pages);
 int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
 			struct page *page)
 {
+	if (nacre_mm_private(vma->vm_mm))
+		return -EOPNOTSUPP;
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return -EFAULT;
 	if (!(vma->vm_flags & VM_MIXEDMAP)) {
@@ -2704,6 +2709,9 @@ static vm_fault_t insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 	pte_t *pte, entry;
 	spinlock_t *ptl;
 
+	if (nacre_mm_private(mm) && !nacc_vma_is_vvar_abi_data(vma))
+		return VM_FAULT_SIGBUS;
+
 	pte = get_locked_pte(mm, addr, &ptl);
 	if (!pte)
 		return VM_FAULT_OOM;
@@ -2743,6 +2751,16 @@ static vm_fault_t insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	}
 
+	/* No allocation or other fallible step may follow the semantic record. */
+	if (nacre_mm_private(mm)) {
+		int error;
+		BUG_ON(mkwrite || pte_write(entry) || pte_exec(entry) || pte_devmap(entry));
+		error = nacc_record_vvar_sbi(__pa(mm->pgd), addr, pfn_t_to_pfn(pfn));
+		if (error) {
+			pte_unmap_unlock(pte, ptl);
+			return error == -ENOMEM ? VM_FAULT_OOM : VM_FAULT_SIGBUS;
+		}
+	}
 	set_pte_at(mm, addr, pte, entry);
 	update_mmu_cache(vma, addr, pte); /* XXX: why not for insert_page? */
 
@@ -3079,7 +3097,11 @@ static int remap_pfn_range_internal(struct vm_area_struct *vma, unsigned long ad
 int remap_pfn_range_notrack(struct vm_area_struct *vma, unsigned long addr,
 		unsigned long pfn, unsigned long size, pgprot_t prot)
 {
-	int error = remap_pfn_range_internal(vma, addr, pfn, size, prot);
+	int error;
+
+	if (nacre_mm_private(vma->vm_mm))
+		return -EOPNOTSUPP;
+	error = remap_pfn_range_internal(vma, addr, pfn, size, prot);
 
 	if (!error)
 		return 0;
@@ -3742,7 +3764,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 			   !pte_devmap(vmf->orig_pte) &&
 			   !(vma->vm_flags & (VM_SHARED | VM_MAYSHARE |
 					      VM_PFNMAP | VM_MIXEDMAP)) &&
-			   nacc_mm_is_active(mm);
+			   nacre_mm_private(mm);
 	nacc_new_private = nacc_monitor_cow ||
 			   nacc_should_install_private_leaf(vma, vmf->address) ||
 			   (pte_present(vmf->orig_pte) &&
@@ -3795,9 +3817,6 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		} else {
 			entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 		}
-		if (unlikely(nacc_new_private))
-			entry = pte_mknacc(entry);
-
 		if (old_folio) {
 			if (!folio_test_anon(old_folio)) {
 				dec_mm_counter(mm, mm_counter_file(old_folio));
@@ -3811,23 +3830,21 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 
 		if (nacc_monitor_cow) {
 			/*
-			 * The Monitor derives the protected source from this exact
-			 * slot and owns copy, clear, local TLB invalidation, and
-			 * destination publication as one transaction.  Linux keeps
-			 * its normal metadata ordering around that commit point.
+			 * The Monitor copies a checked NORMAL source into a fresh
+			 * private destination and commits the mapping. Linux retains
+			 * native rmap/RSS accounting around that transaction.
 			 */
 			folio_add_new_anon_rmap(new_folio, vma, vmf->address,
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			nacc_cow_replace_sbi(__pa(vmf->pte),
-					     pte_val(vmf->orig_pte), pte_val(entry),
-					     vmf->address & PAGE_MASK, __pa(mm->pgd),
-					     page_to_pfn(&new_folio->page));
+			/* Private anonymous pages stay exclusive until fork is implemented. */
+			BUG_ON(pte_nacc(vmf->orig_pte) || PageNacre(vmf->page));
+			nacre_private_claim(mm, vmf->pte, pte_val(entry),
+					    page_to_phys(vmf->page), 2);
 			/*
-			 * The Monitor invalidates the local hart before publishing the
-			 * replacement.  Complete the shootdown for every CPU that may
-			 * retain this mm's old translation before userspace can resume.
+			 * M has completed the full local invalidation. Preserve the
+			 * native Linux translation-accounting hook on this single hart.
 			 */
 			flush_tlb_page(vma, vmf->address);
 			kmsan_copy_page_meta(&new_folio->page, vmf->page);
@@ -3844,7 +3861,12 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			set_pte_at(mm, vmf->address, vmf->pte, entry);
+			if (nacc_new_private)
+				nacre_private_claim(mm, vmf->pte, pte_val(entry),
+						    pfn_is_zero ? 0 : page_to_phys(vmf->page),
+						    pfn_is_zero ? 1 : 2);
+			else
+				set_pte_at(mm, vmf->address, vmf->pte, entry);
 		}
 		update_mmu_cache_range(vmf, vma, vmf->address, vmf->pte, 1);
 		if (old_folio) {
@@ -3882,7 +3904,6 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 	}
 
-pte_unlock_done:
 	mmu_notifier_invalidate_range_end(&range);
 
 	if (new_folio)
@@ -4094,7 +4115,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 * through the exact COW_REPLACE transaction, even for an exclusive page.
 	 */
 	nacc_force_cow_copy = current->thread.nacc_flag == NACC_FORKED &&
-			      nacc_mm_is_active(vma->vm_mm) &&
+			      nacre_mm_private(vma->vm_mm) &&
 			      pte_present(vmf->orig_pte) &&
 			      pte_nacc(vmf->orig_pte);
 #endif
@@ -4569,7 +4590,7 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	if (unlikely(userfaultfd_armed(vma)))
 		goto fallback;
 
-	if (unlikely(nacc_mm_is_active(vma->vm_mm) &&
+	if (unlikely(nacre_mm_private(vma->vm_mm) &&
 		     nacc_addr_in_protected_user_leaf_range(vmf->address)))
 		goto fallback;
 
@@ -5119,7 +5140,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	if (unlikely(userfaultfd_armed(vma)))
 		goto fallback;
 
-	if (unlikely(nacc_mm_is_active(vma->vm_mm) &&
+	if (unlikely(nacre_mm_private(vma->vm_mm) &&
 		     nacc_addr_in_protected_user_leaf_range(vmf->address)))
 		goto fallback;
 
@@ -5204,13 +5225,10 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 
 	nacc_private_leaf = nacc_should_install_private_leaf(vma, addr);
 	/*
-	 * NACC_MM_ACTIVE also covers pre-attach exec construction. Restrict
-	 * this post-attach hint to the initialized current mm; the Monitor
-	 * still validates ATTACHED as the authority.
+	 * Takeover enables private faults for this mm. The Monitor checks the
+	 * bound root/CID/instance and owns zeroing before publishing the leaf.
 	 */
-	nacc_fresh_zero_leaf = nacc_private_leaf &&
-			       vma->vm_mm == current->mm &&
-			       nacc_thread_is_inited();
+	nacc_fresh_zero_leaf = nacc_private_leaf;
 
 	/*
 	 * Use pte_alloc() instead of pte_alloc_map(), so that OOM can
@@ -5309,8 +5327,7 @@ setpte:
 		entry = pte_mkuffd_wp(entry);
 	if (unlikely(nacc_fresh_zero_leaf)) {
 		page_table_check_ptes_set(vma->vm_mm, vmf->pte, entry, 1);
-		nacc_fresh_zero_leaf_sbi(__pa(vmf->pte), pte_val(entry), addr,
-					 __pa(vma->vm_mm->pgd));
+		nacre_private_claim(vma->vm_mm, vmf->pte, pte_val(entry), 0, 1);
 	} else {
 		set_ptes(vma->vm_mm, addr, vmf->pte, entry, nr_pages);
 	}
@@ -5523,9 +5540,10 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 		folio_add_new_anon_rmap(private_folio, vma, addr,
 					RMAP_EXCLUSIVE);
 		folio_add_lru_vma(private_folio, vma);
-		nacc_import_user_leaf_sbi(__pa(vmf->pte), pte_val(entry),
-					  page_to_pfn(&private_folio->page),
-					  addr, __pa(vma->vm_mm->pgd));
+		nacre_private_claim(vma->vm_mm, vmf->pte,
+			pte_val(pfn_pte(folio_pfn(private_folio),
+					__pgprot(pte_val(entry) & 0xff))),
+			page_to_phys(page), 2);
 		if (nacc_imported)
 			*nacc_imported = true;
 		update_mmu_cache_range(vmf, vma, addr, vmf->pte, nr);
@@ -5540,6 +5558,11 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	} else {
 		folio_add_file_rmap_ptes(folio, page, nr, vma);
 	}
+	if (nacre_mm_private(vma->vm_mm) && write && !(vma->vm_flags & VM_SHARED)) {
+		VM_BUG_ON_FOLIO(nr != 1 || page == vmf->page, folio);
+		nacre_private_claim(vma->vm_mm, vmf->pte, pte_val(entry),
+				    page_to_phys(vmf->page), 2);
+	} else
 	set_ptes(vma->vm_mm, addr, vmf->pte, entry, nr);
 
 	/* no need to invalidate: a not-present page won't be cached */
@@ -5792,7 +5815,7 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 /* Return true if we should do read fault-around, false otherwise */
 static inline bool should_fault_around(struct vm_fault *vmf)
 {
-	if (nacc_mm_is_active(vmf->vma->vm_mm) &&
+	if (nacre_mm_private(vmf->vma->vm_mm) &&
 	    nacc_addr_in_protected_user_leaf_range(vmf->address))
 		return false;
 
@@ -6362,6 +6385,11 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	pgd_t *pgd;
 	p4d_t *p4d;
 	vm_fault_t ret;
+
+	if (nacre_mm_private(mm) &&
+	    (vm_flags & (VM_IO | VM_PFNMAP | VM_MIXEDMAP)) &&
+	    !nacc_vma_is_vdso_text(vma) && !nacc_vma_is_vvar_abi_data(vma))
+		return VM_FAULT_SIGBUS;
 
 	pgd = pgd_offset(mm, address);
 	p4d = p4d_alloc(mm, pgd, address);
@@ -7100,6 +7128,10 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 {
 	void *old_buf = buf;
 	int write = gup_flags & FOLL_WRITE;
+
+	/* A foreign protected root must not reach the generic GUP page-table walk. */
+	if (nacre_mm_private(mm) && mm != current->mm)
+		return 0;
 
 	if (mmap_read_lock_killable(mm))
 		return 0;

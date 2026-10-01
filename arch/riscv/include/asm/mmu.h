@@ -21,6 +21,8 @@ typedef struct {
 	unsigned long nacre_cid;
 	/* PREPARE committed a shared Agent subtree and ROOT_L0 role. */
 	unsigned long nacre_prepared;
+	/* Private takeover has started; also survives partial exec failure. */
+	unsigned long nacre_private;
 #ifdef CONFIG_SMP
 	/* A local icache flush is needed before user execution can resume. */
 	cpumask_t icache_stale_mask;
