@@ -26,6 +26,8 @@ SYSCALL_DEFINE1(nacre_register, unsigned long, cid)
 	if (current->thread.nacre_flag != NACRE_IDLE ||
 	    current->thread.nacc_flag || current->thread.nacc_cid)
 		return -EBUSY;
+	if (sbi_ecall(NACRE_SBI_REGISTER_EXT, 23, 0, 0, 0, 0, 0, 0).error)
+		return -EBUSY;
 	if (current->ptrace || signal_pending(current))
 		return -EOPNOTSUPP;
 	BUG_ON(!user_mode(current_pt_regs()) || current->thread.nacre_cid ||
@@ -88,7 +90,7 @@ int nacre_exec_prepare(struct linux_binprm *bprm)
 	struct pt_regs *regs = current_pt_regs();
 	struct vm_area_struct *vma;
 	struct sbiret sbi_ret;
-	unsigned long flags;
+	unsigned long flags, buffer, capacity;
 
 	if (current->thread.nacre_flag == NACRE_IDLE)
 		return 0;
@@ -99,7 +101,9 @@ int nacre_exec_prepare(struct linux_binprm *bprm)
 	       !user_mode(regs) || current->ptrace);
 	/* Materialize the successful exec return value in the initial app frame. */
 	regs->a0 = 0;
-	int ret = nacre_private_prepare(mm);
+	int ret = nacre_buffer_prepare(&buffer, &capacity);
+	if (ret) return ret;
+	ret = nacre_private_prepare(mm);
 	if (ret)
 		return ret;
 	mmap_read_lock(mm);
@@ -111,7 +115,9 @@ int nacre_exec_prepare(struct linux_binprm *bprm)
 	    vma->vm_ops != &nacre_reservation_ops || vma->vm_file ||
 	    pgprot_val(vma->vm_page_prot) != pgprot_val(PAGE_NONE))
 		panic("NACRE exec reservation changed");
-	/* PREPARE uses only the committed live root, after the initial frame is ready. */
+	ret = nacre_bind_initial(buffer, capacity);
+	if (ret) { mmap_read_unlock(mm); return ret; }
+	/* PREPARE seals the initial context and the fixed public buffer. */
 	local_irq_save(flags);
 	sbi_ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_SBI_PREPARE,
 			    0, 0, 0, 0, 0, 0);
@@ -166,13 +172,16 @@ void nacre_exit(void)
 {
 	unsigned long flags;
 
-	if (current->thread.nacre_flag != NACRE_HANDOFF)
+	if (current->thread.nacre_flag != NACRE_HANDOFF &&
+        current->thread.nacre_flag != NACRE_PREPARED)
 		return;
 	BUG_ON(!current->mm || !current->mm->context.nacre_prepared ||
 	       !current->thread.nacre_cid);
 	local_irq_save(flags);
-	nacre_unregister_asm(current->thread.nacre_cid, current->pid,
-			     current_pt_regs());
+	if (current->thread.nacre_flag == NACRE_HANDOFF)
+		nacre_unregister_asm(current->thread.nacre_cid, current->pid,
+				     current_pt_regs());
+	BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 22, 0, 0, 0, 0, 0, 0).error);
 	current->thread.nacre_cid = 0;
 	current->thread.nacre_entry = 0;
 	current->thread.nacre_flag = NACRE_IDLE;

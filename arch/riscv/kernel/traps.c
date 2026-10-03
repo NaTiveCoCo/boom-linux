@@ -1,3 +1,4 @@
+#include <asm/nacre_registration.h>
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Regents of the University of California
@@ -360,7 +361,15 @@ void do_trap_ecall_u(struct pt_regs *regs)
 		add_random_kstack_offset();
 		
 		if (syscall >= 0 && syscall < NR_syscalls)
-			syscall_handler(regs, syscall);
+            syscall_handler(regs, syscall);
+        if (current->thread.nacre_flag == NACRE_HANDOFF) {
+            switch ((long)regs->a0) {
+            case -ERESTARTSYS: case -ERESTARTNOINTR:
+            case -ERESTARTNOHAND: case -ERESTART_RESTARTBLOCK:
+                regs->a0 = -EINTR;
+                break;
+            }
+        }
 
 		/*
 		 * Ultimately, this value will get limited by KSTACK_OFFSET_MAX(),

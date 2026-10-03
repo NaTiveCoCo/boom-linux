@@ -120,7 +120,9 @@ static inline bool nacc_thread_has_root_l0_lifecycle(void)
 
 static inline bool nacc_private_data_uaccess_active(void)
 {
-	return current->mm && current->mm->context.nacre_private;
+	/* Runtime I/O uses the NORMAL buffer through native uaccess only. */
+    return current->mm && current->mm->context.nacre_private &&
+           !current->mm->context.nacre_prepared;
 }
 
 static inline bool nacc_use_secure_pt(struct mm_struct *mm)

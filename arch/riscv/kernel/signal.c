@@ -1,3 +1,4 @@
+#include <asm/nacre_registration.h>
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2009 Sunplus Core Technology Co., Ltd.
@@ -491,6 +492,8 @@ void arch_do_signal_or_restart(struct pt_regs *regs)
 	 * the debugger may change all of our registers.
 	 */
 	if (get_signal(&ksig)) {
+        if (current->thread.nacre_flag == NACRE_HANDOFF)
+            do_group_exit(SIGKILL);
 		/*
 		 * Depending on the signal settings, we may need to revert the
 		 * decision to restart the system call, but skip this if a

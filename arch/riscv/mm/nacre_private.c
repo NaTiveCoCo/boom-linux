@@ -171,7 +171,7 @@ int nacre_private_prepare(struct mm_struct *mm)
 	BUG_ON(mm->context.nacre_private);
 	mm->context.nacre_private = 1;
 	for_each_vma(vmi, vma) {
-		if (vma->vm_start == NACC_AGENT_VA_BASE)
+		if (vma->vm_start == NACC_AGENT_VA_BASE || nacre_buffer_vma(vma))
 			continue;
 		if (nacc_vma_is_vdso_text(vma)) {
 			/* Drop any old normal mapping through native rmap/RSS accounting. */

@@ -103,6 +103,8 @@ SYM_CODE_START(nacre_gate_return)
 	REG_L x5, PT_T0(sp)
 	restore_from_x6_to_x31
 	REG_L sp, PT_SP(sp)
+	/* S returns the native result as a scalar; AS never loads the public frame. */
+	REG_L a3, PT_A0(a2)
 	sret
 SYM_CODE_END(nacre_gate_return)
 ASM_NOKPROBE(nacre_gate_return)

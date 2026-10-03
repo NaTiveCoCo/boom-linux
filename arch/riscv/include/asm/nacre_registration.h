@@ -26,7 +26,12 @@
 #define NACRE_HANDOFF 3
 
 #ifndef __ASSEMBLY__
+#include <linux/types.h>
 struct pt_regs;
+struct vm_area_struct;
+bool nacre_buffer_vma(const struct vm_area_struct *vma);
+int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity);
+int nacre_bind_initial(unsigned long buffer, unsigned long capacity);
 struct mm_struct;
 struct linux_binprm;
 int nacre_exec_reserve(struct mm_struct *mm);
