@@ -46,7 +46,10 @@ int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
     base = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, 0);
     if (IS_ERR_VALUE(base)) { kfree(buffer); return base; }
+    /* pin_user_pages() requires the caller to hold mmap_lock. */
+    mmap_read_lock(mm);
     count = pin_user_pages(base, buffer_pages, FOLL_WRITE | FOLL_LONGTERM, buffer->pages);
+    mmap_read_unlock(mm);
     if (count != buffer_pages) {
         if (count > 0)
             for (long i = 0; i < count; i++) unpin_user_page(buffer->pages[i]);
@@ -88,7 +91,7 @@ int nacre_bind_initial(unsigned long buffer, unsigned long capacity)
     snapshot = kmemdup(current_pt_regs(), 33 * sizeof(unsigned long), GFP_KERNEL);
     if (!snapshot) return -ENOMEM;
     ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 19, __pa(snapshot),
-                    buffer, capacity, task_pid_vnr(current), 0, 0);
+                    buffer, capacity, task_pid_vnr(current), mm->brk, 0);
     kfree(snapshot);
     return ret.error ? -EACCES : 0;
 }
