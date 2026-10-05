@@ -8,6 +8,7 @@
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
 #include <asm/nacc.h>
+#include <asm/vdso.h>
 
 /* Fixed for each exec; pages need not be physically contiguous. */
 static unsigned long buffer_pages = 256;
@@ -25,7 +26,14 @@ static void buffer_close(struct vm_area_struct *vma)
         unpin_user_page(buffer->pages[i]);
     kfree(buffer);
 }
-static const struct vm_operations_struct buffer_ops = { .close = buffer_close };
+static void buffer_open(struct vm_area_struct *vma)
+{
+    /* dup_mmap copied the VMA, not its pin ownership. */
+    struct nacre_buffer *buffer = kzalloc(struct_size(buffer, pages, buffer_pages), GFP_KERNEL);
+    BUG_ON(!buffer || vma->vm_mm == current->mm);
+    vma->vm_private_data = buffer;
+}
+static const struct vm_operations_struct buffer_ops = { .open = buffer_open, .close = buffer_close };
 
 bool nacre_buffer_vma(const struct vm_area_struct *vma)
 {
@@ -63,7 +71,7 @@ int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
     BUG_ON(!vma || vma->vm_start != base || vma->vm_end != base + size || vma->vm_ops);
     vma->vm_ops = &buffer_ops;
     vma->vm_private_data = buffer;
-    vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP);
+    vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
     mmap_write_unlock(mm);
     *address = base;
     *capacity = size;
@@ -91,7 +99,30 @@ int nacre_bind_initial(unsigned long buffer, unsigned long capacity)
     snapshot = kmemdup(current_pt_regs(), 33 * sizeof(unsigned long), GFP_KERNEL);
     if (!snapshot) return -ENOMEM;
     ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 19, __pa(snapshot),
-                    buffer, capacity, task_pid_vnr(current), mm->brk, 0);
+                    buffer, capacity, task_pid_vnr(current), mm->brk, (unsigned long)VDSO_SYMBOL(mm->context.vdso, rt_sigreturn));
     kfree(snapshot);
     return ret.error ? -EACCES : 0;
+}
+
+int nacre_buffer_fork_pin(struct mm_struct *mm, unsigned long *address, unsigned long *capacity)
+{
+    struct vm_area_struct *vma;
+    VMA_ITERATOR(vmi, mm, 0);
+    int rc = -EINVAL;
+    mmap_read_lock(mm);
+    for_each_vma(vmi, vma) {
+        if (!nacre_buffer_vma(vma)) continue;
+        struct nacre_buffer *buffer = vma->vm_private_data;
+        BUG_ON(buffer->count || vma->vm_end - vma->vm_start != buffer_pages * PAGE_SIZE);
+        long count = pin_user_pages_remote(mm, vma->vm_start, buffer_pages,
+            FOLL_WRITE | FOLL_LONGTERM, buffer->pages, NULL);
+        if (count > 0) buffer->count = count;
+        if (count != buffer_pages) { rc = count < 0 ? count : -ENOMEM; break; }
+        *address = vma->vm_start;
+        *capacity = vma->vm_end - vma->vm_start;
+        rc = 0;
+        break;
+    }
+    mmap_read_unlock(mm);
+    return rc;
 }

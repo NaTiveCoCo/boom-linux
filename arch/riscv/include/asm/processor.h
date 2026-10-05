@@ -110,6 +110,7 @@ struct thread_struct {
 	unsigned long nacre_flag;
 	unsigned long nacre_cid;
 	unsigned long nacre_entry;
+    void *nacre_signal;
 
 	unsigned long bad_cause;
 	u32 riscv_v_flags;

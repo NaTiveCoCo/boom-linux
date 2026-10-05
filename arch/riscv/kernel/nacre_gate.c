@@ -29,7 +29,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     regs->status = SR_SPIE | fs;
     switch (kind) {
     case 17: case 24: case 25: case 29: case 56: case 57: case 73: case 80:
-    case 134: case 160: case 172: case 173: case 174: case 175: case 176: case 177: {
+    case 135: case 220: case 260: case 134: case 160: case 172: case 173: case 174: case 175: case 176: case 177: {
         unsigned long args[6];
         static_assert(sizeof(struct stat) == 128);
         static_assert(sizeof(struct termios) == 36);
@@ -46,7 +46,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         regs->a5 = args[5];
         break;
     }
-    case 63: case 64: case 94: case 214: case 226:
+    case 139: case 63: case 64: case 94: case 214: case 226:
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
         regs->a0 = regs->orig_a0 = value;
@@ -67,11 +67,15 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     /* Faults and address-range changes need the original AS request's M authorization. */
     bool fault = kind == EXC_INST_PAGE_FAULT || kind == EXC_LOAD_PAGE_FAULT ||
                  kind == EXC_STORE_PAGE_FAULT;
-    bool memory = kind == 214 || kind == 226;
+    bool memory = kind == 214 || kind == 226 || kind == 220;
     instrumentation_begin();
-    if ((fault || memory) && sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, 0, 0, 0, 0, 0, 0).error) {
-        syscall_enter_from_user_mode(regs, -1);
-        do_group_exit(SIGKILL);
+    if (fault || memory) {
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, 0, 0, 0, 0, 0, 0);
+        if (ret.error) {
+            pr_err("NACRE service BEGIN rejected kind=%lu error=%ld\n", kind, ret.error);
+            syscall_enter_from_user_mode(regs, -1);
+            do_group_exit(SIGKILL);
+        }
     }
     instrumentation_end();
     switch (regs->cause) {
@@ -80,7 +84,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-		do_trap_ecall_u(regs);
+        if (kind == 139) nacre_signal_return(regs);
+        else do_trap_ecall_u(regs);
 		break;
 	case EXC_INST_PAGE_FAULT:
 	case EXC_LOAD_PAGE_FAULT:
@@ -93,10 +98,14 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		instrumentation_end();
     }
     instrumentation_begin();
-    if ((fault || memory) &&
-        sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, memory ? regs->a0 : 0, 0, 0, 0, 0, 0).error) {
-        syscall_enter_from_user_mode(regs, -1);
-        do_group_exit(SIGKILL);
+    if (fault || memory) {
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, memory ? regs->a0 : 0, 0, 0, 0, 0, 0);
+        if (ret.error) {
+            pr_err("NACRE service END rejected kind=%lu error=%ld\n", kind, ret.error);
+            syscall_enter_from_user_mode(regs, -1);
+            do_group_exit(SIGKILL);
+        }
     }
+    nacre_activate();
     instrumentation_end();
 }

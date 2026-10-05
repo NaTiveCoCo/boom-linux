@@ -18,6 +18,9 @@ SYM_CODE_START(nacre_exec_handoff_asm)
 	li t0, TASK_NACRE_PID
 	add t0, tp, t0
 	lw a1, 0(t0)
+	REG_L a7, 0(t2)
+    xori a7, a7, NACRE_FORK_CHILD
+    seqz a7, a7
 	li t0, NACRE_HANDOFF
 	REG_S t0, 0(t2)
 	/* No C, logging or SBI calls are permitted after syscall exit. */
@@ -32,7 +35,9 @@ nacre_register_enter:
 	ori t1, t1, SR_SPP
 	csrw CSR_STATUS, t1
 	/* Hardware enters astvec.BASE; sepc is not an AS entry selector. */
-	li a7, 0
+    li a3, 0
+    /* Fork resumes through the service selector; carry only its signal scalar. */
+    REG_L a4, PT_T6(a2)
 	/* Keep the standard stvec: AS services enter the dedicated early gate. */
 	csrw CSR_SCRATCH, zero
 	li t0, NACRE_ASSTATUS_SPA

@@ -331,6 +331,7 @@ SYM_CODE_START(ret_from_fork)
 	move a0, s1
 	jalr s0
 1:
+    call nacre_fork_child_return
 	move a0, sp /* pt_regs */
 	call syscall_exit_to_user_mode
 	j ret_from_exception

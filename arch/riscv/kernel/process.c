@@ -204,6 +204,7 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 	dst->thread.nacre_flag = 0;
 	dst->thread.nacre_cid = 0;
 	dst->thread.nacre_entry = 0;
+    dst->thread.nacre_signal = NULL;
 	/* clear entire V context, including datap for a new task */
 	memset(&dst->thread.vstate, 0, sizeof(struct __riscv_v_ext_state));
 	memset(&dst->thread.kernel_vstate, 0, sizeof(struct __riscv_v_ext_state));

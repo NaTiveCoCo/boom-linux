@@ -995,18 +995,19 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		pte = pte_mknacc(pte);
 
 	if (unlikely(pte_nacc(src_ptent))) {
-		*prealloc = NULL;
-		__folio_mark_uptodate(new_folio);
-		folio_add_new_anon_rmap(new_folio, dst_vma, addr,
-					RMAP_EXCLUSIVE);
-		folio_add_lru_vma(new_folio, dst_vma);
-		rss[MM_ANONPAGES]++;
-		nacc_fork_copy_install_sbi(__pa(dst_pte), pte_val(src_ptent),
-					   pte_val(pte), addr, __pa(dst_vma->vm_mm->pgd),
-					   page_to_pfn(&new_folio->page));
-		kmsan_copy_page_meta(&new_folio->page, page);
-		return 0;
-	}
+        *prealloc = NULL;
+        __folio_mark_uptodate(new_folio);
+        folio_add_new_anon_rmap(new_folio, dst_vma, addr, RMAP_EXCLUSIVE);
+        folio_add_lru_vma(new_folio, dst_vma);
+        rss[MM_ANONPAGES]++;
+        /* M checks the parent's same-VA PTE; S never reads private page contents. */
+        pte = pfn_pte(folio_pfn(new_folio),
+                      __pgprot(pte_val(src_ptent) & (_PAGE_READ | _PAGE_WRITE | _PAGE_EXEC |
+                                                   _PAGE_USER | _PAGE_PRESENT)));
+        nacre_private_claim(dst_vma->vm_mm, dst_pte, pte_val(pte), page_to_phys(page), 3);
+        kmsan_copy_page_meta(&new_folio->page, page);
+        return 0;
+    }
 
 	if (copy_mc_user_highpage(&new_folio->page, page, addr, src_vma))
 		return -EHWPOISON;
@@ -1062,6 +1063,13 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	int err, nr;
 
 	page = vm_normal_page(src_vma, addr, pte);
+    if (nacre_mm_private(src_vma->vm_mm) && pte_nacc(pte)) {
+        /* vm_normal_page deliberately excludes protected leaves. */
+        page = nacc_private_leaf_page(src_vma->vm_mm, src_vma, addr, pte, NULL);
+        BUG_ON(!page || PageCompound(page));
+        err = copy_present_page(dst_vma, src_vma, dst_pte, src_pte, addr, rss, prealloc, page);
+        return err ? err : 1;
+    }
 	if (unlikely(!page)) {
 		unsigned long nacc_pfn;
 
@@ -1424,9 +1432,13 @@ vma_needs_copy(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	 */
 	if ((nacc_vma_is_vdso_text(src_vma) ||
 	     nacc_vma_is_vvar_abi_data(src_vma)) &&
-	    (nacc_use_secure_pt(src_vma->vm_mm) ||
+	    (nacre_mm_private(src_vma->vm_mm) || nacre_mm_private(dst_vma->vm_mm) ||
+         nacc_use_secure_pt(src_vma->vm_mm) ||
 	     nacc_use_secure_pt(dst_vma->vm_mm)))
 		return false;
+
+    if (nacre_mm_private(src_vma->vm_mm) && (src_vma->vm_flags & VM_NACC_APP))
+        return true;
 
 	if (src_vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return true;
@@ -3838,7 +3850,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			/* Private anonymous pages stay exclusive until fork is implemented. */
+			/* Private anonymous pages stay exclusive across eager fork. */
 			BUG_ON(pte_nacc(vmf->orig_pte) || PageNacre(vmf->page));
 			nacre_private_claim(mm, vmf->pte, pte_val(entry),
 					    page_to_phys(vmf->page), 2);

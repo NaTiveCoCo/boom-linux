@@ -5,7 +5,14 @@
 #include <asm/nacre_registration.h>
 
 	.section .noinstr.text, "ax"
+SYM_FUNC_START(nacre_fork_asm)
+    li a7, NACRE_ENTER_FORK
+    j .Lnacre_object_entry
+SYM_FUNC_END(nacre_fork_asm)
+
 SYM_FUNC_START(nacre_unregister_asm)
+    li a7, NACRE_ENTER_UNREGISTER
+.Lnacre_object_entry:
 	/* Private to Linux: the Agent receives only the return PC/SP/TP/GP. */
 	addi sp, sp, -176
 	sd ra, 0(sp)
@@ -39,7 +46,6 @@ SYM_FUNC_START(nacre_unregister_asm)
 	mv a4, sp
 	mv a5, tp
 	mv a6, gp
-	li a7, NACRE_ENTER_UNREGISTER
 	li t0, SR_SPP
 	csrs CSR_STATUS, t0
 	li t0, NACRE_ASSTATUS_SPA

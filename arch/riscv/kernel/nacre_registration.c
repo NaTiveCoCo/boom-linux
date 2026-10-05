@@ -46,7 +46,7 @@ int nacre_exec_reserve(struct mm_struct *mm)
 
 	if (current->thread.nacre_flag == NACRE_IDLE)
 		return 0;
-	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED || mm == current->mm);
+	BUG_ON((current->thread.nacre_flag != NACRE_REQUESTED && current->thread.nacre_flag != NACRE_HANDOFF) || mm == current->mm);
 	ret = mmap_write_lock_killable(mm);
 	if (ret)
 		return ret;
@@ -173,15 +173,19 @@ void nacre_exit(void)
 	unsigned long flags;
 
 	if (current->thread.nacre_flag != NACRE_HANDOFF &&
-        current->thread.nacre_flag != NACRE_PREPARED)
+        current->thread.nacre_flag != NACRE_PREPARED &&
+        current->thread.nacre_flag != NACRE_FORK_CHILD)
 		return;
 	BUG_ON(!current->mm || !current->mm->context.nacre_prepared ||
 	       !current->thread.nacre_cid);
 	local_irq_save(flags);
-	if (current->thread.nacre_flag == NACRE_HANDOFF)
+    if (current->thread.nacre_flag == NACRE_HANDOFF ||
+        current->thread.nacre_flag == NACRE_FORK_CHILD) nacre_activate();
+	if (current->thread.nacre_flag == NACRE_HANDOFF || current->thread.nacre_flag == NACRE_FORK_CHILD)
 		nacre_unregister_asm(current->thread.nacre_cid, current->pid,
 				     current_pt_regs());
 	BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 22, 0, 0, 0, 0, 0, 0).error);
+    nacre_signal_release();
 	current->thread.nacre_cid = 0;
 	current->thread.nacre_entry = 0;
 	current->thread.nacre_flag = NACRE_IDLE;

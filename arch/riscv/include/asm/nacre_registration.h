@@ -19,6 +19,8 @@
 #define NACRE_ASSTATUS_SPA 2
 #define NACRE_AS_ECALL 24
 #define NACRE_ENTER_UNREGISTER 2
+#define NACRE_ENTER_FORK 3
+#define NACRE_FORK_CHILD 4
 
 #define NACRE_IDLE 0
 #define NACRE_REQUESTED 1
@@ -33,6 +35,17 @@ bool nacre_buffer_vma(const struct vm_area_struct *vma);
 int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity);
 int nacre_bind_initial(unsigned long buffer, unsigned long capacity);
 struct mm_struct;
+struct task_struct;
+struct ksignal;
+bool nacre_signal_deliver(struct ksignal *ksig, struct pt_regs *regs);
+void nacre_signal_return(struct pt_regs *regs);
+void nacre_signal_release(void);
+int nacre_fork_mm_prepare(struct mm_struct *mm);
+void nacre_fork_publish(struct task_struct *child);
+void nacre_activate(void);
+void nacre_fork_child_return(void);
+void nacre_fork_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);
+int nacre_buffer_fork_pin(struct mm_struct *mm, unsigned long *address, unsigned long *capacity);
 struct linux_binprm;
 int nacre_exec_reserve(struct mm_struct *mm);
 int nacre_exec_prepare(struct linux_binprm *bprm);

@@ -116,6 +116,7 @@
 #ifdef NACC
 #include <asm/nacc.h>
 #include <asm/nacre_registration.h>
+#include <asm/nacre_ptp.h>
 #include <asm/sbi.h>
 #endif
 
@@ -1683,10 +1684,16 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 
+	if (current->thread.nacre_flag == NACRE_HANDOFF)
+        nacre_mm_init(mm);
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;
 
+    if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        err = nacre_fork_mm_prepare(mm);
+        if (err) goto free_pt;
+    }
 	mm->hiwater_rss = get_mm_rss(mm);
 	mm->hiwater_vm = mm->total_vm;
 
@@ -1696,6 +1703,9 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	return mm;
 
 free_pt:
+    if (nacre_mm_managed(mm) && current->thread.nacre_flag == NACRE_HANDOFF) {
+        BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x42, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
+    }
 	/* don't put binfmt in mmput, we haven't got module yet */
 	mm->binfmt = NULL;
 	mm_init_owner(mm, NULL);
@@ -2770,7 +2780,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 #ifdef NACC
 	pid_t nacc_nr;
 
-	if (current->thread.nacre_flag == NACRE_HANDOFF)
+	if (current->thread.nacre_flag == NACRE_HANDOFF &&
+        (clone_flags != (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) ||
+         args->exit_signal != SIGCHLD || args->stack || args->tls || args->parent_tid))
 		return -EOPNOTSUPP;
 #endif
 
@@ -2844,6 +2856,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	nacc_register_forked_child_pid(nacc_nr);
 #endif
 
+    if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        nacre_fork_publish(p);
+    }
 	wake_up_new_task(p);
 
 	/* forking complete and child started to run, tell ptracer */

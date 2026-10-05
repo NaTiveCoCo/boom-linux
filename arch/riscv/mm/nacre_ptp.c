@@ -48,11 +48,16 @@ bool nacre_mm_managed(struct mm_struct *mm)
 	return mm && mm->context.nacre_cid;
 }
 
+static noinline void nacre_mm_started(void)
+{
+    asm volatile("nop" ::: "memory");
+}
+
 void nacre_mm_init(struct mm_struct *mm)
 {
 	if (current->thread.nacre_flag == NACRE_IDLE)
 		return;
-	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED || mm == current->mm ||
+	BUG_ON((current->thread.nacre_flag != NACRE_REQUESTED && current->thread.nacre_flag != NACRE_HANDOFF) || mm == current->mm ||
 	       mm->context.nacre_cid || mm->context.nacc_state ||
 	       !current->thread.nacre_cid || (csr_read(CSR_SATP) >> 60) != 8);
 	/* Query once on first NACRE construction, then reuse across mm lifetimes. */
@@ -64,7 +69,11 @@ void nacre_mm_init(struct mm_struct *mm)
 	}
 	/* The target mm selects PTP services; M learns its root at allocation. */
 	mm->context.nacre_cid = current->thread.nacre_cid;
-	asm volatile(".global nacre_mm_started\nnacre_mm_started: nop" ::: "memory");
+    if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x40, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
+        mm->context.nacre_private = 1;
+    }
+    nacre_mm_started();
 }
 
 /*

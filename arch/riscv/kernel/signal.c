@@ -492,8 +492,7 @@ void arch_do_signal_or_restart(struct pt_regs *regs)
 	 * the debugger may change all of our registers.
 	 */
 	if (get_signal(&ksig)) {
-        if (current->thread.nacre_flag == NACRE_HANDOFF)
-            do_group_exit(SIGKILL);
+        if (nacre_signal_deliver(&ksig, regs)) return;
 		/*
 		 * Depending on the signal settings, we may need to revert the
 		 * decision to restart the system call, but skip this if a
