@@ -394,7 +394,7 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 		goto err;
 
 #ifdef CONFIG_RISCV
-	nacre_mm_init(mm);
+	nacre_mm_init(mm, false);
 #endif
 
 #ifdef NACC
@@ -1028,6 +1028,9 @@ static int exec_mmap(struct mm_struct *mm)
 		}
 	}
 
+#ifdef CONFIG_RISCV
+    nacre_exec_commit();
+#endif
 	task_lock(tsk);
 	membarrier_exec_mmap(mm);
 
@@ -1056,6 +1059,11 @@ static int exec_mmap(struct mm_struct *mm)
 		BUG_ON(active_mm != old_mm);
 		setmax_mm_hiwater_rss(&tsk->signal->maxrss, old_mm);
 		mm_update_next_owner(old_mm);
+#ifdef CONFIG_RISCV
+        if (old_mm->context.nacre_prepared)
+            nacre_exec_mmput(old_mm);
+        else
+#endif
 		mmput(old_mm);
 		return 0;
 	}
@@ -1995,14 +2003,6 @@ static int do_execveat_common(int fd, struct filename *filename,
 	struct linux_binprm *bprm;
 	int retval;
 
-#ifdef CONFIG_RISCV
-	/* Preserve the running AU address space until reexec has a lifecycle. */
-	if (current->thread.nacre_flag == NACRE_HANDOFF) {
-		if (!IS_ERR(filename))
-			putname(filename);
-		return -EOPNOTSUPP;
-	}
-#endif
 	if (IS_ERR(filename)) {
 		retval = PTR_ERR(filename);
 		goto out;

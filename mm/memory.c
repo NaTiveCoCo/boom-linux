@@ -991,23 +991,8 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	if (userfaultfd_pte_wp(dst_vma, src_ptent))
 		/* Uffd-wp needs to be delivered to dest pte as well */
 		pte = pte_mkuffd_wp(pte);
-	if (unlikely(pte_nacc(src_ptent)))
-		pte = pte_mknacc(pte);
-
-	if (unlikely(pte_nacc(src_ptent))) {
-        *prealloc = NULL;
-        __folio_mark_uptodate(new_folio);
-        folio_add_new_anon_rmap(new_folio, dst_vma, addr, RMAP_EXCLUSIVE);
-        folio_add_lru_vma(new_folio, dst_vma);
-        rss[MM_ANONPAGES]++;
-        /* M checks the parent's same-VA PTE; S never reads private page contents. */
-        pte = pfn_pte(folio_pfn(new_folio),
-                      __pgprot(pte_val(src_ptent) & (_PAGE_READ | _PAGE_WRITE | _PAGE_EXEC |
-                                                   _PAGE_USER | _PAGE_PRESENT)));
-        nacre_private_claim(dst_vma->vm_mm, dst_pte, pte_val(pte), page_to_phys(page), 3);
-        kmsan_copy_page_meta(&new_folio->page, page);
-        return 0;
-    }
+	/* Protected application pages must use fork COW sharing. */
+	BUG_ON(pte_nacc(src_ptent));
 
 	if (copy_mc_user_highpage(&new_folio->page, page, addr, src_vma))
 		return -EHWPOISON;
@@ -1063,13 +1048,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	int err, nr;
 
 	page = vm_normal_page(src_vma, addr, pte);
-    if (nacre_mm_private(src_vma->vm_mm) && pte_nacc(pte)) {
-        /* vm_normal_page deliberately excludes protected leaves. */
-        page = nacc_private_leaf_page(src_vma->vm_mm, src_vma, addr, pte, NULL);
-        BUG_ON(!page || PageCompound(page));
-        err = copy_present_page(dst_vma, src_vma, dst_pte, src_pte, addr, rss, prealloc, page);
-        return err ? err : 1;
-    }
+
 	if (unlikely(!page)) {
 		unsigned long nacc_pfn;
 
@@ -1123,8 +1102,11 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		 * future.
 		 */
 		if (unlikely(folio_try_dup_anon_rmap_pte(folio, page, src_vma))) {
-			/* Page may be pinned, we have to copy. */
+			/* Protected application pages cannot enter the pinned eager-copy path. */
 			folio_put(folio);
+			if (pte_nacc(pte))
+				return -EBUSY;
+			/* Page may be pinned, we have to copy. */
 			err = copy_present_page(dst_vma, src_vma, dst_pte, src_pte,
 						addr, rss, prealloc, page);
 			return err ? err : 1;
@@ -1259,7 +1241,7 @@ again:
 		 * locks, allocate, and try again.
 		 * If copy failed due to hwpoison in source page, break out.
 		 */
-		if (unlikely(ret == -EAGAIN || ret == -EHWPOISON))
+		if (unlikely(ret == -EAGAIN || ret == -EHWPOISON || ret == -EBUSY))
 			break;
 		if (unlikely(prealloc)) {
 			/*
@@ -3842,7 +3824,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 
 		if (nacc_monitor_cow) {
 			/*
-			 * The Monitor copies a checked NORMAL source into a fresh
+			 * The Monitor copies a checked source into a fresh
 			 * private destination and commits the mapping. Linux retains
 			 * native rmap/RSS accounting around that transaction.
 			 */
@@ -3850,10 +3832,14 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			/* Private anonymous pages stay exclusive across eager fork. */
-			BUG_ON(pte_nacc(vmf->orig_pte) || PageNacre(vmf->page));
-			nacre_private_claim(mm, vmf->pte, pte_val(entry),
-					    page_to_phys(vmf->page), 2);
+			if (pte_nacc(vmf->orig_pte))
+				nacre_private_claim(mm, vmf->pte, pte_val(entry),
+						    pte_val(vmf->orig_pte), NACRE_LEAF_COW_REPLACE);
+			else {
+				BUG_ON(PageNacre(vmf->page));
+				nacre_private_claim(mm, vmf->pte, pte_val(entry),
+						    page_to_phys(vmf->page), NACRE_LEAF_COPY);
+			}
 			/*
 			 * M has completed the full local invalidation. Preserve the
 			 * native Linux translation-accounting hook on this single hart.
@@ -4117,20 +4103,8 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	const bool unshare = vmf->flags & FAULT_FLAG_UNSHARE;
 	struct vm_area_struct *vma = vmf->vma;
 	struct folio *folio = NULL;
-	bool nacc_force_cow_copy = false;
 	pte_t pte;
 
-#ifdef NACC
-	/*
-	 * A selected child cannot widen leaf permissions through generic
-	 * SET_PTES before its first-user-return attach. Force this write fault
-	 * through the exact COW_REPLACE transaction, even for an exclusive page.
-	 */
-	nacc_force_cow_copy = current->thread.nacc_flag == NACC_FORKED &&
-			      nacre_mm_private(vma->vm_mm) &&
-			      pte_present(vmf->orig_pte) &&
-			      pte_nacc(vmf->orig_pte);
-#endif
 
 	if (likely(!unshare)) {
 		if (userfaultfd_pte_wp(vma, ptep_get(vmf->pte))) {
@@ -4200,7 +4174,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 * If we encounter a page that is marked exclusive, we must reuse
 	 * the page without further checks.
 	 */
-	if (!nacc_force_cow_copy && folio && folio_test_anon(folio) &&
+	if (folio && folio_test_anon(folio) &&
 	    (PageAnonExclusive(vmf->page) || wp_can_reuse_anon_folio(folio, vma))) {
 		if (!PageAnonExclusive(vmf->page))
 			SetPageAnonExclusive(vmf->page);

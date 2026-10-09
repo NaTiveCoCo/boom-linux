@@ -29,11 +29,24 @@ void nacre_protnone_finish(struct mm_struct *mm, unsigned long start,
 	BUG_ON(ret.error);
 }
 
+/* M reports final retirement; a shared PFN keeps its one protection reference. */
+void nacre_private_released(unsigned long old, unsigned long retired)
+{
+	struct page *page = pfn_to_page(pte_pfn(__pte(old)));
+	BUG_ON(!pte_nacc(__pte(old)) || !PageNacre(page) || retired > 1);
+	if (retired) {
+		ClearPageNacre(page);
+		/* The last PTE was revoked, fenced and scrubbed before NORMAL. */
+		put_page(page);
+	}
+}
+
 void nacre_private_claim(struct mm_struct *mm, void *slot, unsigned long value,
 			 unsigned long source, unsigned long op)
 {
 	struct page *page = pfn_to_page(pte_pfn(__pte(value)));
 	struct sbiret ret;
+	unsigned long old = READ_ONCE(*(unsigned long *)slot);
 	BUG_ON(!nacre_mm_managed(mm) || !nacre_ptp_contains(slot) ||
 	       PageNacre(page) || PageCompound(page) || PageReserved(page) ||
 	       is_zero_pfn(page_to_pfn(page)));
@@ -45,8 +58,13 @@ void nacre_private_claim(struct mm_struct *mm, void *slot, unsigned long value,
 	if (ret.error) {
 		ClearPageNacre(page);
 		put_page(page);
-		panic("NACRE private claim protocol error=%ld", ret.error);
+		panic("NACRE private claim protocol error=%ld root=%lx slot=%lx value=%lx source=%lx op=%lu",
+		      ret.error, __pa(mm->pgd), __pa(slot), value, source, op);
 	}
+	if (op == NACRE_LEAF_COW_REPLACE)
+		nacre_private_released(old, ret.value);
+	else
+		BUG_ON(ret.value);
 }
 
 struct takeover {

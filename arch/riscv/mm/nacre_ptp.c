@@ -53,7 +53,7 @@ static noinline void nacre_mm_started(void)
     asm volatile("nop" ::: "memory");
 }
 
-void nacre_mm_init(struct mm_struct *mm)
+void nacre_mm_init(struct mm_struct *mm, bool fork)
 {
 	if (current->thread.nacre_flag == NACRE_IDLE)
 		return;
@@ -70,10 +70,19 @@ void nacre_mm_init(struct mm_struct *mm)
 	/* The target mm selects PTP services; M learns its root at allocation. */
 	mm->context.nacre_cid = current->thread.nacre_cid;
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
-        BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x40, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
-        mm->context.nacre_private = 1;
+        BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, fork ? 0x40 : 0x43,
+                        __pa(mm->pgd), 0, 0, 0, 0, 0).error);
+        /* Exec constructs new public ELF pages, then seals them before AS entry. */
+        mm->context.nacre_private = fork;
     }
     nacre_mm_started();
+}
+
+void nacre_mm_discard(struct mm_struct *mm)
+{
+    BUG_ON(!nacre_mm_managed(mm) || mm->context.nacre_prepared);
+    /* All PTPs have returned before pgd_free; also covers construction without a PTP. */
+    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x42, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
 }
 
 /*
@@ -171,14 +180,15 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 {
 	struct mm_struct *mm = virt_to_ptdesc(slot)->pt_mm;
 	BUG_ON(!nacre_ptp_contains(slot) || !nacre_mm_managed(mm));
-	unsigned long old = checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
-	if (!op && !value && pte_nacc(__pte(old))) {
-		struct page *page = pfn_to_page(pte_pfn(__pte(old)));
-		BUG_ON(!PageNacre(page));
-		ClearPageNacre(page);
-		/* M has revoked, fenced, scrubbed, and restored NORMAL synchronously. */
-		put_page(page);
-	}
+	/* Leaf PTPs are readable in S; the caller holds the native PTE lock. */
+	unsigned long old = READ_ONCE(*(unsigned long *)slot);
+	unsigned long retired = checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
+	if (!op && !value && pte_nacc(__pte(old)))
+		nacre_private_released(old, retired);
+	else
+		BUG_ON(retired);
+	if (op == 2)
+		return 0;
 	return old;
 }
 

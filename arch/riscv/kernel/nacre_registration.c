@@ -5,6 +5,7 @@
 #include <linux/irqflags.h>
 #include <linux/ptrace.h>
 #include <linux/sched/signal.h>
+#include <linux/sched/mm.h>
 #include <linux/syscalls.h>
 #include <asm/nacc.h>
 #include <asm/nacre_registration.h>
@@ -75,7 +76,9 @@ unlock:
 
 void nacre_exec_cancel(void)
 {
-	if (current->thread.nacre_flag == NACRE_IDLE)
+	/* A failed reexec keeps the original AS continuation and live mm. */
+	if (current->thread.nacre_flag == NACRE_IDLE ||
+        current->thread.nacre_flag == NACRE_HANDOFF)
 		return;
 	BUG_ON(current->thread.nacre_flag != NACRE_REQUESTED);
 	current->thread.nacre_cid = 0;
@@ -162,9 +165,14 @@ void nacre_user_return_prepare(struct pt_regs *regs)
 		BUG_ON((long)regs->a0 >= 0);
 		nacre_exec_cancel();
 	}
-	if (current->thread.nacre_flag == NACRE_PREPARED)
+	if (current->thread.nacre_flag == NACRE_PREPARED) {
 		BUG_ON(current->ptrace ||
 		       regs->a0 || !user_mode(regs));
+        /* The final exit hook runs after scheduling, with interrupts disabled. */
+        nacre_activate();
+    } else if (current->thread.nacre_flag == NACRE_FORK_CHILD) {
+        nacre_activate();
+    }
 }
 
 /* do_exit still owns the service frame and mm; no return to AU is possible. */
@@ -192,4 +200,26 @@ void nacre_exit(void)
 	asm volatile(".global nacre_exit_cleared\nnacre_exit_cleared: nop" ::: "memory");
 	local_irq_restore(flags);
 	asm volatile(".global nacre_exit_done\nnacre_exit_done: nop" ::: "memory");
+}
+
+/* Called after exec's last interruptible lock, before switching away from old mm. */
+void nacre_exec_commit(void)
+{
+    if (current->thread.nacre_flag != NACRE_HANDOFF) return;
+    unsigned long cid = current->thread.nacre_cid;
+    nacre_exit();
+    /* The new ELF follows the initial registration path with the same identity. */
+    current->thread.nacre_cid = cid;
+    current->thread.nacre_flag = NACRE_REQUESTED;
+}
+
+/* Retire the old root before new ELF allocations can reuse its public PFNs. */
+void nacre_exec_mmput(struct mm_struct *mm)
+{
+    BUG_ON(!mm->context.nacre_prepared || atomic_read(&mm->mm_users) != 1);
+    /* Keep the root object alive across exit_mmap, independently of lazy mm refs. */
+    mmgrab(mm);
+    mmput(mm);
+    nacre_root_retire(mm);
+    mmdrop(mm);
 }

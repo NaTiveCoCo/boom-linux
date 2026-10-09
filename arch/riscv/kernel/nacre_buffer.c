@@ -81,25 +81,13 @@ int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
 int nacre_bind_initial(unsigned long buffer, unsigned long capacity)
 {
     struct mm_struct *mm = current->mm;
-    struct vm_area_struct *vma;
-    VMA_ITERATOR(vmi, mm, 0);
     struct sbiret ret;
     void *snapshot;
-    for_each_vma(vmi, vma) {
-        unsigned long perm = ((vma->vm_flags & VM_READ) ? 2 : 0) |
-            ((vma->vm_flags & VM_WRITE) ? 4 : 0) | ((vma->vm_flags & VM_EXEC) ? 8 : 0);
-        if (vma->vm_start == NACC_AGENT_VA_BASE || nacre_buffer_vma(vma)) continue;
-        ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 18, __pa(mm->pgd),
-                        vma->vm_start, vma->vm_end, perm,
-                        (vma->vm_flags & (VM_IO | VM_PFNMAP | VM_MIXEDMAP)) ? 0 :
-                        vma->vm_file ? 2 : 1, 0);
-        if (ret.error) return -EACCES;
-    }
     /* Kernel stacks may be vmalloc-backed; only this copy has a direct-map PA. */
     snapshot = kmemdup(current_pt_regs(), 33 * sizeof(unsigned long), GFP_KERNEL);
     if (!snapshot) return -ENOMEM;
     ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 19, __pa(snapshot),
-                    buffer, capacity, task_pid_vnr(current), mm->brk, (unsigned long)VDSO_SYMBOL(mm->context.vdso, rt_sigreturn));
+                    buffer, capacity, task_pid_vnr(current), (unsigned long)VDSO_SYMBOL(mm->context.vdso, rt_sigreturn), 0);
     kfree(snapshot);
     return ret.error ? -EACCES : 0;
 }

@@ -60,7 +60,8 @@ void nacre_fork_publish(struct task_struct *child)
     unsigned long descriptor[4] = {child->pid, (unsigned long)task_pt_regs(child),
                                    (unsigned long)child, __pa(mm->pgd)};
     /* The child inherits the same buffer VA and has independent ordinary PFNs. */
-    BUG_ON(copy_to_user((void __user *)address, descriptor, sizeof(descriptor)));
+    /* IRQs are disabled; the pinned parent buffer must already be writable. */
+    BUG_ON(copy_to_user_nofault((void __user *)address, descriptor, sizeof(descriptor)));
     nacre_activate();
     nacre_fork_asm(current->thread.nacre_cid, current->pid, current_pt_regs());
     local_irq_restore(flags);
@@ -73,9 +74,6 @@ void noinstr nacre_fork_child_return(void)
 {
     if (current->thread.nacre_flag != NACRE_FORK_CHILD) return;
     struct pt_regs *regs = current_pt_regs();
-    instrumentation_begin();
-    nacre_activate();
-    instrumentation_end();
     syscall_exit_to_user_mode(regs);
     asm volatile("mv a0, %0\nj nacre_exec_handoff_asm" : : "r"(regs) : "a0", "memory");
     __builtin_unreachable();

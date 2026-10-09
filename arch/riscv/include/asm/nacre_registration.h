@@ -51,6 +51,8 @@ int nacre_exec_reserve(struct mm_struct *mm);
 int nacre_exec_prepare(struct linux_binprm *bprm);
 void __noreturn nacre_exec_handoff(void);
 void nacre_exec_cancel(void);
+void nacre_exec_commit(void);
+void nacre_exec_mmput(struct mm_struct *mm);
 void nacre_exit(void);
 void nacre_unregister_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);
 void nacre_user_return_prepare(struct pt_regs *regs);

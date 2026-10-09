@@ -8,6 +8,7 @@
 #include <asm/asm-prototypes.h>
 #include <asm/nacre_registration.h>
 #include <asm/uaccess.h>
+#include <asm/unistd.h>
 #include <asm/stat.h>
 #include <asm/termbits.h>
 #include <linux/utsname.h>
@@ -28,14 +29,36 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
-    case 17: case 24: case 25: case 29: case 56: case 57: case 73: case 80:
-    case 135: case 220: case 260: case 134: case 160: case 172: case 173: case 174: case 175: case 176: case 177: {
+    case __NR_getcwd:
+    case __NR_dup3:
+    case __NR_fcntl:
+    case __NR_ioctl:
+    case __NR_openat:
+    case __NR_close:
+    case __NR_pipe2:
+    case __NR_sendfile:
+    case __NR_ppoll:
+    case __NR_newfstatat:
+    case __NR_fstat:
+    case __NR_execve:
+    case __NR_rt_sigprocmask:
+    case __NR_clone:
+    case __NR_wait4:
+    case __NR_rt_sigaction:
+    case __NR_uname:
+    case __NR_getpid:
+    case __NR_getppid:
+    case __NR_getuid:
+    case __NR_geteuid:
+    case __NR_getgid:
+    case __NR_getegid: {
         unsigned long args[6];
         static_assert(sizeof(struct stat) == 128);
         static_assert(sizeof(struct termios) == 36);
         static_assert(sizeof(struct new_utsname) == 390);
         /* The fixed argument area and pointees are in the sealed public buffer. */
-        BUG_ON(copy_from_user(args, (void __user *)value, sizeof(args)));
+        /* IRQs are still disabled; pinned arguments must be readable without faulting in pages. */
+        BUG_ON(copy_from_user_nofault(args, (void __user *)value, sizeof(args)));
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
         regs->a0 = regs->orig_a0 = args[0];
@@ -46,7 +69,12 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         regs->a5 = args[5];
         break;
     }
-    case 139: case 63: case 64: case 94: case 214: case 226:
+    case __NR_rt_sigreturn:
+    case __NR_read:
+    case __NR_write:
+    case __NR_exit_group:
+    case __NR_brk:
+    case __NR_mprotect:
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
         regs->a0 = regs->orig_a0 = value;
@@ -64,12 +92,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         panic("NACRE invalid public service kind=%lx", kind);
     }
 	instrumentation_end();
-    /* Faults and address-range changes need the original AS request's M authorization. */
-    bool fault = kind == EXC_INST_PAGE_FAULT || kind == EXC_LOAD_PAGE_FAULT ||
-                 kind == EXC_STORE_PAGE_FAULT;
-    bool memory = kind == 214 || kind == 226 || kind == 220;
+    /* Only fork/exec handoff needs an AS request in M. */
+    bool handoff = kind == __NR_clone || kind == __NR_execve;
     instrumentation_begin();
-    if (fault || memory) {
+    if (handoff) {
         struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, 0, 0, 0, 0, 0, 0);
         if (ret.error) {
             pr_err("NACRE service BEGIN rejected kind=%lu error=%ld\n", kind, ret.error);
@@ -84,7 +110,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-        if (kind == 139) nacre_signal_return(regs);
+        if (kind == __NR_rt_sigreturn) nacre_signal_return(regs);
         else do_trap_ecall_u(regs);
 		break;
 	case EXC_INST_PAGE_FAULT:
@@ -98,8 +124,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		instrumentation_end();
     }
     instrumentation_begin();
-    if (fault || memory) {
-        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, memory ? regs->a0 : 0, 0, 0, 0, 0, 0);
+    if (handoff) {
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, regs->a0, 0, 0, 0, 0, 0);
         if (ret.error) {
             pr_err("NACRE service END rejected kind=%lu error=%ld\n", kind, ret.error);
             syscall_enter_from_user_mode(regs, -1);

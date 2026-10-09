@@ -1685,7 +1685,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 		goto fail_nomem;
 
 	if (current->thread.nacre_flag == NACRE_HANDOFF)
-        nacre_mm_init(mm);
+        nacre_mm_init(mm, true);
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;

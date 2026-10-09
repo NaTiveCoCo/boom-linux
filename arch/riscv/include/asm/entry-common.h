@@ -12,7 +12,7 @@
 static inline void arch_exit_to_user_mode_prepare(struct pt_regs *regs,
 						  unsigned long ti_work)
 {
-	/* Cancel skipped exec requests and validate the final handoff state only. */
+	/* Cancel skipped exec and publish prepared/fork bindings after all scheduling. */
 	if (unlikely(current->thread.nacre_flag != NACRE_IDLE))
 		nacre_user_return_prepare(regs);
 

@@ -207,6 +207,8 @@ static inline void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 		nacc_retire_root_sbi(virt_to_phys(pgd));
 	if (mm && mm->context.nacre_prepared)
 		nacre_root_retire(mm);
+    else if (nacre_mm_managed(mm))
+        nacre_mm_discard(mm);
 	pagetable_free(virt_to_ptdesc(pgd));
 }
 
