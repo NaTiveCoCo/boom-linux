@@ -12,6 +12,10 @@
 #include <asm/stat.h>
 #include <asm/termbits.h>
 #include <linux/utsname.h>
+#include <linux/resource.h>
+#include <linux/socket.h>
+#include <linux/uio.h>
+#include <linux/eventpoll.h>
 
 /* Each native handler owns its user-entry/exit accounting and scheduling. */
 asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid,
@@ -30,13 +34,29 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     regs->status = SR_SPIE | fs;
     switch (kind) {
     case __NR_getcwd:
+    case __NR_dup:
     case __NR_dup3:
     case __NR_fcntl:
     case __NR_ioctl:
     case __NR_openat:
     case __NR_close:
     case __NR_pipe2:
+    case __NR_socket:
+    case __NR_bind:
+    case __NR_listen:
+    case __NR_accept:
+    case __NR_getsockname:
+    case __NR_sendto:
+    case __NR_recvfrom:
+    case __NR_setsockopt:
+    case __NR_getsockopt:
+    case __NR_recvmsg:
+    case __NR_socketpair:
     case __NR_sendfile:
+    case __NR_pselect6:
+    case __NR_setitimer:
+    case __NR_clock_gettime:
+    case __NR_kill:
     case __NR_ppoll:
     case __NR_newfstatat:
     case __NR_fstat:
@@ -46,6 +66,27 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_wait4:
     case __NR_rt_sigaction:
     case __NR_uname:
+    case __NR_pread64:
+    case __NR_pwrite64:
+    case __NR_munmap:
+    case __NR_mmap:
+    case __NR_eventfd2:
+    case __NR_epoll_create1:
+    case __NR_epoll_ctl:
+    case __NR_epoll_pwait:
+    case __NR_mkdirat:
+    case __NR_fchownat:
+    case __NR_lseek:
+    case __NR_writev:
+    case __NR_rt_sigsuspend:
+    case __NR_setgid:
+    case __NR_setuid:
+    case __NR_setgroups:
+    case __NR_prctl:
+    case __NR_connect:
+    case __NR_accept4:
+    case __NR_prlimit64:
+    case __NR_getrusage:
     case __NR_getpid:
     case __NR_getppid:
     case __NR_getuid:
@@ -56,6 +97,13 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(sizeof(struct stat) == 128);
         static_assert(sizeof(struct termios) == 36);
         static_assert(sizeof(struct new_utsname) == 390);
+        static_assert(sizeof(struct user_msghdr) == 56);
+        static_assert(sizeof(struct iovec) == 16);
+        static_assert(sizeof(struct epoll_event) == 16);
+        static_assert(sizeof(struct rlimit64) == 16);
+        static_assert(sizeof(struct rusage) == 144);
+        static_assert(sizeof(struct __kernel_timespec) == 16);
+        static_assert(sizeof(struct __kernel_old_itimerval) == 32);
         /* The fixed argument area and pointees are in the sealed public buffer. */
         /* IRQs are still disabled; pinned arguments must be readable without faulting in pages. */
         BUG_ON(copy_from_user_nofault(args, (void __user *)value, sizeof(args)));

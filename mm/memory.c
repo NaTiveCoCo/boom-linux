@@ -5544,7 +5544,13 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	} else {
 		folio_add_file_rmap_ptes(folio, page, nr, vma);
 	}
-	if (nacre_mm_private(vma->vm_mm) && write && !(vma->vm_flags & VM_SHARED)) {
+	if (nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_NACC_APP) &&
+        (vma->vm_flags & VM_SHARED) && vma_is_anon_shmem(vma)) {
+        /* Eager population installs each fresh shmem page before fork can inherit it. */
+        VM_BUG_ON_FOLIO(nr != 1 || PageNacre(page), folio);
+        nacre_private_claim(vma->vm_mm, vmf->pte, pte_val(entry), 0,
+                            NACRE_LEAF_SHARED_ZERO);
+    } else if (nacre_mm_private(vma->vm_mm) && write && !(vma->vm_flags & VM_SHARED)) {
 		VM_BUG_ON_FOLIO(nr != 1 || page == vmf->page, folio);
 		nacre_private_claim(vma->vm_mm, vmf->pte, pte_val(entry),
 				    page_to_phys(vmf->page), 2);
@@ -5636,7 +5642,7 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	 * approach also applies to non-anonymous-shmem faults to avoid
 	 * inflating the RSS of the process.
 	 */
-	if (!vma_is_anon_shmem(vma) || unlikely(userfaultfd_armed(vma))) {
+	if (nacre_mm_private(vma->vm_mm) || !vma_is_anon_shmem(vma) || unlikely(userfaultfd_armed(vma))) {
 		nr_pages = 1;
 	} else if (nr_pages > 1) {
 		pgoff_t idx = folio_page_idx(folio, page);

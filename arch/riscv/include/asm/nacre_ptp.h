@@ -12,6 +12,7 @@ struct page;
 #define NACRE_LEAF_COPY 2
 /* Operation 3 was the retired eager fork copy. */
 #define NACRE_LEAF_COW_REPLACE 4
+#define NACRE_LEAF_SHARED_ZERO 5
 void nacre_private_released(unsigned long old, unsigned long retired);
 int nacre_private_prepare(struct mm_struct *mm);
 int nacre_protnone_reserve(struct mm_struct *mm, unsigned long start, unsigned long end);

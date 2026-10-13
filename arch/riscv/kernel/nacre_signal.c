@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* A plain SIGCHLD handler needs no public copy of private AU PC/GPRs. */
+/* Plain SIGCHLD/SIGALRM handlers need no public copy of private AU PC/GPRs. */
 #include <linux/entry-common.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
@@ -15,7 +15,7 @@ bool nacre_signal_deliver(struct ksignal *ksig, struct pt_regs *regs)
 {
     if (current->thread.nacre_flag != NACRE_HANDOFF &&
         current->thread.nacre_flag != NACRE_FORK_CHILD) return false;
-    if (ksig->sig != SIGCHLD || current->thread.nacre_signal ||
+    if ((ksig->sig != SIGCHLD && ksig->sig != SIGALRM) || current->thread.nacre_signal ||
         (ksig->ka.sa.sa_flags & (SA_SIGINFO | SA_ONSTACK | SA_RESETHAND))) {
         signal_setup_done(-EFAULT, ksig, 0);
         return true;
@@ -26,7 +26,7 @@ bool nacre_signal_deliver(struct ksignal *ksig, struct pt_regs *regs)
     fstate_save(current, regs);
     state->fp = current->thread.fstate;
     current->thread.nacre_signal = state;
-    regs->t6 = SIGCHLD;
+    regs->t6 = ksig->sig;
     signal_setup_done(0, ksig, 0);
     return true;
 }

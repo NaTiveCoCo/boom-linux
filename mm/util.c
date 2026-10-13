@@ -25,6 +25,7 @@
 #include <linux/compat.h>
 
 #include <linux/uaccess.h>
+#include <asm/nacre_ptp.h>
 
 #include <kunit/visibility.h>
 
@@ -589,8 +590,16 @@ unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 			      &uf);
 		mmap_write_unlock(mm);
 		userfaultfd_unmap_complete(mm, &uf);
-		if (populate)
-			mm_populate(ret, populate);
+        if (!IS_ERR_VALUE(ret) && nacre_mm_private(mm) && !file &&
+            (flag & MAP_SHARED) && (flag & MAP_ANONYMOUS)) {
+            /* Inherit resident protected leaves, not a new lazy-sharing protocol. */
+            int error = __mm_populate(ret, PAGE_ALIGN(len), 0);
+            if (error) {
+                BUG_ON(vm_munmap(ret, len));
+                return error;
+            }
+        } else if (populate)
+            mm_populate(ret, populate);
 	}
 	return ret;
 }

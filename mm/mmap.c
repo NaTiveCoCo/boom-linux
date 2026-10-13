@@ -71,11 +71,11 @@ static bool nacc_should_mark_private_anon_vma(struct mm_struct *mm,
 {
 	unsigned long protected_end;
 
-	if (!mm || !nacc_mm_is_active(mm))
+	if (!nacre_mm_private(mm))
 		return false;
 	if (file)
 		return false;
-	if (vm_flags & (VM_SHARED | VM_MAYSHARE | VM_PFNMAP | VM_MIXEDMAP))
+	if (vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return false;
 	if (end <= start)
 		return false;
@@ -319,7 +319,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 	/* Cover kernel mapping callers too, including SysV shmat and hugetlb files. */
 	if (nacre_mm_private(mm) &&
-	    ((flags & (MAP_SHARED | MAP_HUGETLB)) || (file && is_file_hugepages(file))))
+	    ((flags & MAP_HUGETLB) || (file && is_file_hugepages(file)) ||
+         ((flags & MAP_SHARED) && (file || !(flags & MAP_ANONYMOUS) ||
+          prot != (PROT_READ | PROT_WRITE)))))
 		return -EOPNOTSUPP;
 
 	/*
