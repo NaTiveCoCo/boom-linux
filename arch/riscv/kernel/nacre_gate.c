@@ -17,6 +17,8 @@
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
 
+#define NACRE_GATE_BUFFER_GROW 0x1000
+
 /* Each native handler owns its user-entry/exit accounting and scheduling. */
 asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid,
 					  struct pt_regs *regs, unsigned long kind,
@@ -33,6 +35,9 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
+    case NACRE_GATE_BUFFER_GROW:
+        regs->cause = EXC_SYSCALL;
+        break;
     case __NR_getcwd:
     case __NR_dup:
     case __NR_dup3:
@@ -105,7 +110,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(sizeof(struct __kernel_timespec) == 16);
         static_assert(sizeof(struct __kernel_old_itimerval) == 32);
         /* The fixed argument area and pointees are in the sealed public buffer. */
-        /* IRQs are still disabled; pinned arguments must be readable without faulting in pages. */
+        /* IRQs are still disabled; resident arguments must be readable without faulting in pages. */
         BUG_ON(copy_from_user_nofault(args, (void __user *)value, sizeof(args)));
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
@@ -140,8 +145,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         panic("NACRE invalid public service kind=%lx", kind);
     }
 	instrumentation_end();
-    /* Only fork/exec handoff needs an AS request in M. */
-    bool handoff = kind == __NR_clone || kind == __NR_execve;
+    /* Handoff and buffer growth carry an AS request to M. */
+    bool handoff = kind == __NR_clone || kind == __NR_execve || kind == NACRE_GATE_BUFFER_GROW;
     instrumentation_begin();
     if (handoff) {
         struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, 0, 0, 0, 0, 0, 0);
@@ -158,7 +163,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-        if (kind == __NR_rt_sigreturn) nacre_signal_return(regs);
+        if (kind == NACRE_GATE_BUFFER_GROW) {
+            syscall_enter_from_user_mode(regs, -1);
+            regs->a0 = nacre_buffer_grow(value);
+            syscall_exit_to_user_mode(regs);
+        } else if (kind == __NR_rt_sigreturn) nacre_signal_return(regs);
         else do_trap_ecall_u(regs);
 		break;
 	case EXC_INST_PAGE_FAULT:

@@ -20,7 +20,7 @@ int nacre_fork_mm_prepare(struct mm_struct *mm)
     unsigned long address, capacity;
     int rc = nacre_exec_reserve(mm);
     if (rc) return rc;
-    rc = nacre_buffer_fork_pin(mm, &address, &capacity);
+    rc = nacre_buffer_fork_prepare(mm, &address, &capacity);
     if (rc) return rc;
     /* vDSO/VVAR records cannot be inherited from a different root-instance. */
     struct vm_area_struct *vma;
@@ -40,18 +40,19 @@ void nacre_fork_publish(struct task_struct *child)
     struct mm_struct *mm = child->mm;
     struct vm_area_struct *vma;
     VMA_ITERATOR(vmi, mm, 0);
-    unsigned long address = 0, capacity = 0, flags;
+    unsigned long address = 0, capacity = 0, limit = 0, flags;
     mmap_read_lock(mm);
     for_each_vma(vmi, vma)
         if (nacre_buffer_vma(vma)) {
             address = vma->vm_start;
-            capacity = vma->vm_end - vma->vm_start;
+            capacity = nacre_buffer_capacity(vma);
+            limit = vma->vm_end - vma->vm_start;
             break;
         }
     BUG_ON(!address || !capacity || !nacre_mm_private(mm));
     local_irq_save(flags);
     struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x41, __pa(mm->pgd),
-                                  address, capacity, task_pid_vnr(child), 0, 0);
+                                  address, capacity, task_pid_vnr(child), limit, 0);
     BUG_ON(ret.error);
     mm->context.nacre_prepared = 1;
     child->thread.nacre_cid = current->thread.nacre_cid;
@@ -60,7 +61,7 @@ void nacre_fork_publish(struct task_struct *child)
     unsigned long descriptor[4] = {child->pid, (unsigned long)task_pt_regs(child),
                                    (unsigned long)child, __pa(mm->pgd)};
     /* The child inherits the same buffer VA and has independent ordinary PFNs. */
-    /* IRQs are disabled; the pinned parent buffer must already be writable. */
+    /* IRQs are disabled; the resident parent buffer must already be writable. */
     BUG_ON(copy_to_user_nofault((void __user *)address, descriptor, sizeof(descriptor)));
     nacre_activate();
     nacre_fork_asm(current->thread.nacre_cid, current->pid, current_pt_regs());

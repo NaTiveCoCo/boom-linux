@@ -1703,9 +1703,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	return mm;
 
 free_pt:
-    if (nacre_mm_managed(mm) && current->thread.nacre_flag == NACRE_HANDOFF) {
-        BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x42, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
-    }
+    /* Keep construction ownership through unmap; pgd_free sends BUILD_ABORT. */
 	/* don't put binfmt in mmput, we haven't got module yet */
 	mm->binfmt = NULL;
 	mm_init_owner(mm, NULL);

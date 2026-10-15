@@ -93,6 +93,7 @@
 #include "swap.h"
 
 #include <asm/nacc.h>
+#include <asm/nacre_registration.h>
 #include <asm/sbi.h>
 
 
@@ -2600,7 +2601,7 @@ EXPORT_SYMBOL(vm_insert_pages);
 int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
 			struct page *page)
 {
-	if (nacre_mm_private(vma->vm_mm))
+	if (nacre_mm_private(vma->vm_mm) && !nacre_buffer_vma(vma))
 		return -EOPNOTSUPP;
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return -EFAULT;
