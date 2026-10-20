@@ -136,12 +136,19 @@ static int buffer_prepare(struct task_struct *child, unsigned long *address, uns
     struct mm_struct *mm = current->mm;
     struct vm_area_struct *vma;
     struct nacre_buffer *buffer;
-    unsigned long base, size;
+    unsigned long base, size, populate;
     if (!buffer_pages || buffer_pages > 4096) return -EINVAL;
     size = buffer_pages * PAGE_SIZE;
-    base = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, 0);
+    /* VM_SPECIAL must be present before mmap_region considers merging with
+     * adjacent anonymous mappings; installing vm_ops afterwards is too late. */
+    mmap_write_lock(mm);
+    base = do_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS,
+                   VM_DONTEXPAND | VM_DONTDUMP | VM_WIPEONFORK | VM_MIXEDMAP,
+                   0, &populate, NULL);
+    mmap_write_unlock(mm);
     if (IS_ERR_VALUE(base)) return base;
+    BUG_ON(populate);
     buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
     if (!buffer) { vm_munmap(base, size); return -ENOMEM; }
     buffer->pool = pool_get(mm->context.nacre_cid);
@@ -153,7 +160,7 @@ static int buffer_prepare(struct task_struct *child, unsigned long *address, uns
     vma->vm_ops = &buffer_ops;
     vma->vm_private_data = buffer;
     /* Dedicated non-anonymous backing; fork copies only this VA window. */
-    vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_WIPEONFORK | VM_MIXEDMAP);
+    /* The dedicated flags were installed before insertion into the VMA tree. */
     if (child) {
         struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_THREAD_ADMIT,
                                      base, size, task_pid_vnr(child), task_pid_vnr(current), 0, 0);
