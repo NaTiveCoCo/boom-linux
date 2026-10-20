@@ -12,7 +12,7 @@
 
 void nacre_activate(void)
 {
-    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 24, 0, 0, 0, 0, 0, 0).error);
+    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 24, task_pid_vnr(current), 0, 0, 0, 0, 0).error);
 }
 
 int nacre_fork_mm_prepare(struct mm_struct *mm)
@@ -41,9 +41,11 @@ void nacre_fork_publish(struct task_struct *child)
     struct vm_area_struct *vma;
     VMA_ITERATOR(vmi, mm, 0);
     unsigned long address = 0, capacity = 0, limit = 0, flags;
+    bool thread = mm == current->mm;
+    if (thread) nacre_buffer_thread_prepare(child);
     mmap_read_lock(mm);
     for_each_vma(vmi, vma)
-        if (nacre_buffer_vma(vma)) {
+        if (nacre_buffer_vma(vma) && (!thread || vma->vm_start == child->thread.nacre_buffer)) {
             address = vma->vm_start;
             capacity = nacre_buffer_capacity(vma);
             limit = vma->vm_end - vma->vm_start;
@@ -51,16 +53,22 @@ void nacre_fork_publish(struct task_struct *child)
         }
     BUG_ON(!address || !capacity || !nacre_mm_private(mm));
     local_irq_save(flags);
-    struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x41, __pa(mm->pgd),
-                                  address, capacity, task_pid_vnr(child), limit, 0);
-    BUG_ON(ret.error);
-    mm->context.nacre_prepared = 1;
+    unsigned long entry = current->thread.nacre_entry;
+    if (!thread) {
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x41, __pa(mm->pgd),
+                                      address, capacity, task_pid_vnr(child), limit, 0);
+        BUG_ON(ret.error);
+        entry = ret.value;
+        mm->context.nacre_prepared = 1;
+    }
+    child->thread.nacre_buffer = address;
     child->thread.nacre_cid = current->thread.nacre_cid;
-    child->thread.nacre_entry = ret.value;
+    child->thread.nacre_entry = entry;
     child->thread.nacre_flag = NACRE_FORK_CHILD;
-    unsigned long descriptor[4] = {child->pid, (unsigned long)task_pt_regs(child),
-                                   (unsigned long)child, __pa(mm->pgd)};
-    /* The child inherits the same buffer VA and has independent ordinary PFNs. */
+    unsigned long descriptor[5] = {child->pid, (unsigned long)task_pt_regs(child),
+                                   (unsigned long)child, __pa(mm->pgd), task_pid_vnr(child)};
+    /* Ordinary fork inherits the VA; shared-mm threads own distinct leases. */
+    address = current->thread.nacre_buffer;
     /* IRQs are disabled; the resident parent buffer must already be writable. */
     BUG_ON(copy_to_user_nofault((void __user *)address, descriptor, sizeof(descriptor)));
     nacre_activate();

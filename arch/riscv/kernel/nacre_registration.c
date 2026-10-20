@@ -175,15 +175,15 @@ void nacre_user_return_prepare(struct pt_regs *regs)
     }
 }
 
-/* do_exit still owns the service frame and mm; no return to AU is possible. */
-void nacre_exit(void)
+/* Cancel private execution before either task exit or exec switches away. */
+static bool nacre_cancel(void)
 {
 	unsigned long flags;
 
 	if (current->thread.nacre_flag != NACRE_HANDOFF &&
         current->thread.nacre_flag != NACRE_PREPARED &&
         current->thread.nacre_flag != NACRE_FORK_CHILD)
-		return;
+		return false;
 	BUG_ON(!current->mm || !current->mm->context.nacre_prepared ||
 	       !current->thread.nacre_cid);
 	local_irq_save(flags);
@@ -192,13 +192,21 @@ void nacre_exit(void)
 	if (current->thread.nacre_flag == NACRE_HANDOFF || current->thread.nacre_flag == NACRE_FORK_CHILD)
 		nacre_unregister_asm(current->thread.nacre_cid, current->pid,
 				     current_pt_regs());
-	BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 22, 0, 0, 0, 0, 0, 0).error);
+	BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 22, task_pid_vnr(current), 0, 0, 0, 0, 0).error);
     nacre_signal_release();
 	current->thread.nacre_cid = 0;
 	current->thread.nacre_entry = 0;
 	current->thread.nacre_flag = NACRE_IDLE;
 	asm volatile(".global nacre_exit_cleared\nnacre_exit_cleared: nop" ::: "memory");
 	local_irq_restore(flags);
+    return true;
+}
+
+/* do_exit still owns the service frame and mm; siblings retain their leases. */
+void nacre_exit(void)
+{
+    if (!nacre_cancel()) return;
+    nacre_buffer_release();
 	asm volatile(".global nacre_exit_done\nnacre_exit_done: nop" ::: "memory");
 }
 
@@ -207,7 +215,9 @@ void nacre_exec_commit(void)
 {
     if (current->thread.nacre_flag != NACRE_HANDOFF) return;
     unsigned long cid = current->thread.nacre_cid;
-    nacre_exit();
+    BUG_ON(!nacre_cancel());
+    /* exec_mmap holds old_mm's read lock; exit_mmap will release its last lease. */
+    current->thread.nacre_buffer = 0;
     /* The new ELF follows the initial registration path with the same identity. */
     current->thread.nacre_cid = cid;
     current->thread.nacre_flag = NACRE_REQUESTED;

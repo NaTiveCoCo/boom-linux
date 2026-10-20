@@ -6,6 +6,9 @@
 #include <linux/freezer.h>
 
 #include "futex.h"
+#ifdef NACC
+#include <asm/nacre_registration.h>
+#endif
 
 /*
  * READ this before attempting to hack on futexes!
@@ -621,6 +624,15 @@ retry:
 retry_private:
 	*hb = futex_q_lock(q);
 
+#ifdef NACC
+    if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        /* AS prefaulted this exact word. Compare after locking, never against
+         * a staging copy; an unmapped word returns EFAULT without S uaccess. */
+        ret = nacre_futex_compare(uaddr, val);
+        if (ret) futex_q_unlock(*hb);
+        return ret;
+    }
+#endif
 	ret = futex_get_value_locked(&uval, uaddr);
 
 	if (ret) {

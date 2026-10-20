@@ -131,7 +131,7 @@ static void buffer_claim(struct vm_area_struct *vma, unsigned long count)
     }
 }
 
-int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
+static int buffer_prepare(struct task_struct *child, unsigned long *address, unsigned long *capacity)
 {
     struct mm_struct *mm = current->mm;
     struct vm_area_struct *vma;
@@ -154,12 +154,54 @@ int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
     vma->vm_private_data = buffer;
     /* Dedicated non-anonymous backing; fork copies only this VA window. */
     vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_WIPEONFORK | VM_MIXEDMAP);
+    if (child) {
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_THREAD_ADMIT,
+                                     base, size, task_pid_vnr(child), task_pid_vnr(current), 0, 0);
+        BUG_ON(ret.error);
+    }
     buffer_claim(vma, 1);
     *address = base;
     *capacity = nacre_buffer_capacity(vma);
     mmap_write_unlock(mm);
     if (!*capacity) { vm_munmap(base, size); return -ENOMEM; }
     return 0;
+}
+
+int nacre_buffer_prepare(unsigned long *address, unsigned long *capacity)
+{
+    int rc = buffer_prepare(NULL, address, capacity);
+    if (!rc) current->thread.nacre_buffer = *address;
+    return rc;
+}
+
+void nacre_buffer_thread_prepare(struct task_struct *child)
+{
+    unsigned long address, capacity;
+    BUG_ON(child->mm != current->mm);
+    BUG_ON(buffer_prepare(child, &address, &capacity));
+    BUG_ON(capacity != PAGE_SIZE);
+    child->thread.nacre_buffer = address;
+    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_THREAD_SEAL,
+                     task_pid_vnr(child), task_pid_vnr(current), 0, 0, 0, 0).error);
+}
+
+/* The M task is already revoked; siblings retain their own VMA leases. */
+void nacre_buffer_release(void)
+{
+    struct mm_struct *mm = current->mm;
+    unsigned long address = current->thread.nacre_buffer, size;
+    BUG_ON(!address);
+    /* Exit must finish revoking the lease even when exit_group has queued
+     * a fatal signal. vm_munmap() takes a killable lock and can return EINTR. */
+    mmap_write_lock(mm);
+    struct vm_area_struct *vma = find_vma(mm, address);
+    BUG_ON(!vma || vma->vm_start != address || !nacre_buffer_vma(vma));
+    size = vma->vm_end - address;
+    BUG_ON(do_munmap(mm, address, size, NULL));
+    mmap_write_unlock(mm);
+    current->thread.nacre_buffer = 0;
+    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_TASK_DETACH,
+                     task_pid_vnr(current), 0, 0, 0, 0, 0).error);
 }
 
 int nacre_bind_initial(unsigned long buffer, unsigned long capacity)
@@ -199,17 +241,14 @@ int nacre_buffer_fork_prepare(struct mm_struct *mm, unsigned long *address, unsi
 long nacre_buffer_grow(unsigned long capacity)
 {
     struct mm_struct *mm = current->mm;
-    struct vm_area_struct *vma;
-    VMA_ITERATOR(vmi, mm, 0);
+    unsigned long address = current->thread.nacre_buffer;
     long result = -EINVAL;
     mmap_write_lock(mm);
-    for_each_vma(vmi, vma) {
-        if (!nacre_buffer_vma(vma)) continue;
-        if (!capacity || capacity & ~PAGE_MASK || capacity > vma->vm_end - vma->vm_start)
-            break;
+    struct vm_area_struct *vma = find_vma(mm, address);
+    BUG_ON(!address || !vma || vma->vm_start != address || !nacre_buffer_vma(vma));
+    if (capacity && !(capacity & ~PAGE_MASK) && capacity <= vma->vm_end - address) {
         buffer_claim(vma, capacity / PAGE_SIZE);
         result = nacre_buffer_capacity(vma);
-        break;
     }
     mmap_write_unlock(mm);
     return result;

@@ -21,6 +21,13 @@
 #define NACRE_ENTER_UNREGISTER 2
 #define NACRE_ENTER_FORK 3
 #define NACRE_FORK_CHILD 4
+/* Shared-mm clone with optional libc parent-TID/clear-child-TID notification. */
+#define NACRE_THREAD_FLAGS 0x000d0f00UL
+#define NACRE_PTHREAD_FLAGS 0x003d0f00UL
+#define NACRE_THREAD_ADMIT 0x44
+#define NACRE_THREAD_SEAL 0x45
+#define NACRE_TASK_DETACH 0x46
+#define NACRE_FUTEX_COMPARE 0x47
 
 #define NACRE_IDLE 0
 #define NACRE_REQUESTED 1
@@ -30,6 +37,7 @@
 #ifndef __ASSEMBLY__
 #include <linux/types.h>
 struct pt_regs;
+int nacre_futex_compare(u32 __user *address, u32 expected);
 struct vm_area_struct;
 bool nacre_buffer_vma(const struct vm_area_struct *vma);
 unsigned long nacre_buffer_capacity(const struct vm_area_struct *vma);
@@ -44,6 +52,8 @@ void nacre_signal_return(struct pt_regs *regs);
 void nacre_signal_release(void);
 int nacre_fork_mm_prepare(struct mm_struct *mm);
 void nacre_fork_publish(struct task_struct *child);
+void nacre_buffer_thread_prepare(struct task_struct *child);
+void nacre_buffer_release(void);
 void nacre_activate(void);
 void nacre_fork_child_return(void);
 void nacre_fork_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);

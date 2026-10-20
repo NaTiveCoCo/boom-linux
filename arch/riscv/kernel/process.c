@@ -202,6 +202,7 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 	*dst = *src;
 	/* A new task must request its own exec registration. */
 	dst->thread.nacre_flag = 0;
+    dst->thread.nacre_buffer = 0;
 	dst->thread.nacre_cid = 0;
 	dst->thread.nacre_entry = 0;
     dst->thread.nacre_signal = NULL;

@@ -39,6 +39,9 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         regs->cause = EXC_SYSCALL;
         break;
     case __NR_getcwd:
+    case __NR_futex:
+    case __NR_set_tid_address:
+    case __NR_madvise:
     case __NR_dup:
     case __NR_dup3:
     case __NR_fcntl:
@@ -92,6 +95,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_accept4:
     case __NR_prlimit64:
     case __NR_getrusage:
+    case __NR_sched_yield:
     case __NR_getpid:
     case __NR_getppid:
     case __NR_getuid:
@@ -125,6 +129,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_rt_sigreturn:
     case __NR_read:
     case __NR_write:
+    case __NR_exit:
     case __NR_exit_group:
     case __NR_brk:
     case __NR_mprotect:
@@ -147,9 +152,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 	instrumentation_end();
     /* Handoff and buffer growth carry an AS request to M. */
     bool handoff = kind == __NR_clone || kind == __NR_execve || kind == NACRE_GATE_BUFFER_GROW;
+    handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9);
     instrumentation_begin();
     if (handoff) {
-        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, 0, 0, 0, 0, 0, 0);
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, task_pid_vnr(current), 0, 0, 0, 0, 0);
         if (ret.error) {
             pr_err("NACRE service BEGIN rejected kind=%lu error=%ld\n", kind, ret.error);
             syscall_enter_from_user_mode(regs, -1);
@@ -182,7 +188,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     }
     instrumentation_begin();
     if (handoff) {
-        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, regs->a0, 0, 0, 0, 0, 0);
+        struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 21, regs->a0, task_pid_vnr(current), 0, 0, 0, 0);
         if (ret.error) {
             pr_err("NACRE service END rejected kind=%lu error=%ld\n", kind, ret.error);
             syscall_enter_from_user_mode(regs, -1);

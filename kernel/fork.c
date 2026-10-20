@@ -1632,7 +1632,12 @@ static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 			 * We don't check the error code - if userspace has
 			 * not set up a proper pointer then tough luck.
 			 */
-			put_user(0, tsk->clear_child_tid);
+            /* AS already cleared its private word before leaving the task.
+             * Keep the native address/key and wake ordering for join. */
+#ifdef NACC
+            if (!nacre_mm_private(mm))
+#endif
+			    put_user(0, tsk->clear_child_tid);
 			do_futex(tsk->clear_child_tid, FUTEX_WAKE,
 					1, NULL, NULL, 0, 0);
 		}
@@ -2778,10 +2783,15 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 #ifdef NACC
 	pid_t nacc_nr;
 
-	if (current->thread.nacre_flag == NACRE_HANDOFF &&
-        (clone_flags != (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) ||
-         args->exit_signal != SIGCHLD || args->stack || args->tls || args->parent_tid))
-		return -EOPNOTSUPP;
+    if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        bool ordinary = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
+                        args->exit_signal == SIGCHLD && !args->stack && !args->tls && !args->parent_tid;
+        bool raw = clone_flags == NACRE_THREAD_FLAGS && !args->parent_tid && !args->child_tid;
+        bool pthread = clone_flags == NACRE_PTHREAD_FLAGS && args->parent_tid && args->child_tid;
+        bool thread = (raw || pthread) && !args->exit_signal && args->stack && args->tls;
+        if ((!ordinary && !thread) || (ordinary && !thread_group_empty(current)))
+            return -EOPNOTSUPP;
+    }
 #endif
 
 	/*
