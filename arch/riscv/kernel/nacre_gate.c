@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/entry-common.h>
+#include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/ptrace.h>
 #include <linux/sched/signal.h>
@@ -18,6 +19,20 @@
 #include <linux/eventpoll.h>
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
+#define NACRE_GATE_USER_ACCESS 0x1001
+
+/* Resolve a syscall operand without reading protected data or raising SIGSEGV. */
+static long nacre_user_access(unsigned long address, unsigned long permissions)
+{
+    bool unlocked = false;
+    int rc;
+    BUG_ON(permissions != 2 && permissions != 4);
+    mmap_read_lock(current->mm);
+    rc = fixup_user_fault(current->mm, address,
+                         permissions == 4 ? FAULT_FLAG_WRITE : 0, &unlocked);
+    mmap_read_unlock(current->mm);
+    return rc;
+}
 
 /* Each native handler owns its user-entry/exit accounting and scheduling. */
 asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid,
@@ -35,6 +50,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
+    case NACRE_GATE_USER_ACCESS:
     case NACRE_GATE_BUFFER_GROW:
         regs->cause = EXC_SYSCALL;
         break;
@@ -176,7 +192,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-        if (kind == NACRE_GATE_BUFFER_GROW) {
+        if (kind == NACRE_GATE_USER_ACCESS) {
+            syscall_enter_from_user_mode(regs, -1);
+            regs->a0 = nacre_user_access(value, buffer);
+            syscall_exit_to_user_mode(regs);
+        } else if (kind == NACRE_GATE_BUFFER_GROW) {
             syscall_enter_from_user_mode(regs, -1);
             regs->a0 = nacre_buffer_grow(value);
             syscall_exit_to_user_mode(regs);
