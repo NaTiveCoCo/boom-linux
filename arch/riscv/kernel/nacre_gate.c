@@ -8,6 +8,7 @@
 #include <asm/sbi.h>
 #include <asm/asm-prototypes.h>
 #include <asm/nacre_registration.h>
+#include <asm/nacre_signal_abi.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/stat.h>
@@ -50,6 +51,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
+    case NACRE_GATE_SIGNAL:
     case NACRE_GATE_USER_ACCESS:
     case NACRE_GATE_BUFFER_GROW:
         regs->cause = EXC_SYSCALL;
@@ -149,7 +151,6 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         regs->a5 = args[5];
         break;
     }
-    case __NR_rt_sigreturn:
     case __NR_read:
     case __NR_write:
     case __NR_exit:
@@ -192,7 +193,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-        if (kind == NACRE_GATE_USER_ACCESS) {
+        if (kind == NACRE_GATE_SIGNAL) {
+            syscall_enter_from_user_mode(regs, -1);
+            regs->a0 = nacre_signal_control(value, buffer, count, regs);
+            syscall_exit_to_user_mode(regs);
+        } else if (kind == NACRE_GATE_USER_ACCESS) {
             syscall_enter_from_user_mode(regs, -1);
             regs->a0 = nacre_user_access(value, buffer);
             syscall_exit_to_user_mode(regs);
@@ -200,7 +205,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
             syscall_enter_from_user_mode(regs, -1);
             regs->a0 = nacre_buffer_grow(value);
             syscall_exit_to_user_mode(regs);
-        } else if (kind == __NR_rt_sigreturn) nacre_signal_return(regs);
+        }
         else do_trap_ecall_u(regs);
 		break;
 	case EXC_INST_PAGE_FAULT:

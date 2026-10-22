@@ -1,4 +1,5 @@
 #include <asm/nacre_registration.h>
+#include <asm/nacre_signal_abi.h>
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2009 Sunplus Core Technology Co., Ltd.
@@ -349,15 +350,13 @@ static inline void __user *get_sigframe(struct ksignal *ksig,
 	return (void __user *)sp;
 }
 
-static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
-	struct pt_regs *regs)
+static int setup_rt_frame_at(struct ksignal *ksig, sigset_t *set,
+	struct pt_regs *regs, struct rt_sigframe __user *frame)
 {
-	struct rt_sigframe __user *frame;
 	long err = 0;
 	unsigned long __maybe_unused addr;
 	size_t frame_size = get_rt_frame_size(false);
 
-	frame = get_sigframe(ksig, regs, frame_size);
 	if (current->thread.nacc_flag & NACC_INITED) {
 		nacc_debug("[Linux]: setup_rt_frame pid=%d comm=%s cid=%lx sig=%d handler=%px old_epc=%lx old_ra=%lx old_sp=%lx frame=%px frame_size=%zu\n",
 			   current->pid, current->comm, current->thread.nacc_cid,
@@ -427,6 +426,54 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	return 0;
 }
 
+
+static int setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
+{
+    return setup_rt_frame_at(ksig, set, regs,
+                            get_sigframe(ksig, regs, get_rt_frame_size(false)));
+}
+
+/* Export a native template containing no interrupted AU integer registers. */
+long nacre_signal_frame_export(struct ksignal *ksig, sigset_t *mask,
+                               unsigned long stack, unsigned long buffer,
+                               struct pt_regs *regs)
+{
+    struct pt_regs public = { .sp = stack, .status = regs->status };
+    struct nacre_signal_export header;
+    struct rt_sigframe __user *frame = (void __user *)(buffer + NACRE_SIGNAL_DATA);
+    static_assert(sizeof(struct rt_sigframe) == NACRE_SIGNAL_FRAME_SIZE);
+    static_assert(offsetof(struct rt_sigframe, uc) == NACRE_SIGNAL_UC);
+    static_assert(offsetof(struct rt_sigframe, uc.uc_mcontext.sc_regs) == NACRE_SIGNAL_REGS);
+    static_assert(offsetof(struct rt_sigframe, uc.uc_mcontext.sc_fpregs) == NACRE_SIGNAL_FP);
+    /* The current runtime does not handle variable-sized vector frames. */
+    if (get_rt_frame_size(false) != NACRE_SIGNAL_FRAME_SIZE) return -EOPNOTSUPP;
+    header = (struct nacre_signal_export) {
+        .frame = (unsigned long)get_sigframe(ksig, &public, NACRE_SIGNAL_FRAME_SIZE),
+        .handler = (unsigned long)ksig->ka.sa.sa_handler,
+        .size = NACRE_SIGNAL_FRAME_SIZE, .signal = ksig->sig,
+    };
+    if (clear_user(frame, sizeof(*frame)) ||
+        setup_rt_frame_at(ksig, mask, &public, frame) ||
+        clear_user(&frame->uc.uc_mcontext.sc_regs, sizeof(frame->uc.uc_mcontext.sc_regs)) ||
+        copy_to_user((void __user *)buffer, &header, sizeof(header))) return -EFAULT;
+    return 0;
+}
+
+/* AS supplies only public controls/FP state; real PC/GPRs never leave AU. */
+long nacre_signal_frame_restore(unsigned long buffer, struct pt_regs *regs)
+{
+    struct rt_sigframe __user *frame = (void __user *)(buffer + NACRE_SIGNAL_DATA);
+    struct pt_regs public = { .status = regs->status };
+    sigset_t mask;
+    if (copy_from_user(&mask, &frame->uc.uc_sigmask, sizeof(mask))) return -EFAULT;
+    if (restore_sigcontext(&public, &frame->uc.uc_mcontext)) return -EFAULT;
+    regs->status = (regs->status & ~SR_FS) | (public.status & SR_FS);
+    if (restore_altstack(&frame->uc.uc_stack)) return -EFAULT;
+    current->restart_block.fn = do_no_restart_syscall;
+    set_current_blocked(&mask);
+    return 0;
+}
+
 static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 {
 	sigset_t *oldset = sigmask_to_save();
@@ -458,6 +505,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 
 void arch_do_signal_or_restart(struct pt_regs *regs)
 {
+    if (nacre_signal_dispatch(regs)) return;
 	unsigned long continue_addr = 0, restart_addr = 0;
 	int retval = 0;
 	struct ksignal ksig;
@@ -492,7 +540,6 @@ void arch_do_signal_or_restart(struct pt_regs *regs)
 	 * the debugger may change all of our registers.
 	 */
 	if (get_signal(&ksig)) {
-        if (nacre_signal_deliver(&ksig, regs)) return;
 		/*
 		 * Depending on the signal settings, we may need to revert the
 		 * decision to restart the system call, but skip this if a

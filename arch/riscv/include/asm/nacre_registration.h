@@ -47,8 +47,10 @@ int nacre_bind_initial(unsigned long buffer, unsigned long capacity);
 struct mm_struct;
 struct task_struct;
 struct ksignal;
-bool nacre_signal_deliver(struct ksignal *ksig, struct pt_regs *regs);
-void nacre_signal_return(struct pt_regs *regs);
+bool nacre_signal_dispatch(struct pt_regs *regs);
+long nacre_signal_control(unsigned long operation, unsigned long buffer,
+                          unsigned long stack, struct pt_regs *regs);
+
 void nacre_signal_release(void);
 int nacre_fork_mm_prepare(struct mm_struct *mm);
 void nacre_fork_publish(struct task_struct *child);

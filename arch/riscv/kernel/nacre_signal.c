@@ -1,48 +1,68 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Plain SIGCHLD/SIGALRM handlers need no public copy of private AU PC/GPRs. */
+/* Linux owns signal selection and masks; AU register frames stay private. */
 #include <linux/entry-common.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <asm/nacre_registration.h>
-#include <asm/switch_to.h>
+#include <asm/nacre_signal_abi.h>
 
+long nacre_signal_frame_export(struct ksignal *, sigset_t *, unsigned long,
+                               unsigned long, struct pt_regs *);
+long nacre_signal_frame_restore(unsigned long, struct pt_regs *);
+
+/* Exists only between selection and publication, never throughout a handler. */
 struct nacre_signal_state {
+    struct ksignal signal;
     sigset_t mask;
-    struct __riscv_d_ext_state fp;
 };
 
-bool nacre_signal_deliver(struct ksignal *ksig, struct pt_regs *regs)
+bool nacre_signal_dispatch(struct pt_regs *regs)
 {
+    struct ksignal signal;
     if (current->thread.nacre_flag != NACRE_HANDOFF &&
         current->thread.nacre_flag != NACRE_FORK_CHILD) return false;
-    if ((ksig->sig != SIGCHLD && ksig->sig != SIGALRM) || current->thread.nacre_signal ||
-        (ksig->ka.sa.sa_flags & (SA_SIGINFO | SA_ONSTACK | SA_RESETHAND))) {
-        signal_setup_done(-EFAULT, ksig, 0);
-        return true;
+    /* Internal frame preparation may fault/schedule before delivery commits. */
+    if (current->thread.nacre_signal) return true;
+    if (get_signal(&signal)) {
+        struct nacre_signal_state *state = kzalloc(sizeof(*state), GFP_KERNEL);
+        BUG_ON(!state);
+        state->signal = signal;
+        state->mask = *sigmask_to_save();
+        current->thread.nacre_signal = state;
+        regs->t6 = signal.sig;
+    } else {
+        restore_saved_sigmask();
     }
-    struct nacre_signal_state *state = kzalloc(sizeof(*state), GFP_KERNEL);
-    BUG_ON(!state);
-    state->mask = *sigmask_to_save();
-    fstate_save(current, regs);
-    state->fp = current->thread.fstate;
-    current->thread.nacre_signal = state;
-    regs->t6 = ksig->sig;
-    signal_setup_done(0, ksig, 0);
     return true;
 }
 
-void nacre_signal_return(struct pt_regs *regs)
+long nacre_signal_control(unsigned long operation, unsigned long buffer,
+                          unsigned long stack, struct pt_regs *regs)
 {
     struct nacre_signal_state *state = current->thread.nacre_signal;
-    BUG_ON(!state);
-    syscall_enter_from_user_mode(regs, -1);
-    set_current_blocked(&state->mask);
-    current->thread.fstate = state->fp;
-    fstate_restore(current, regs);
-    kfree(state);
-    current->thread.nacre_signal = NULL;
-    regs->a0 = 0;
-    syscall_exit_to_user_mode(regs);
+    long rc;
+    switch (operation) {
+    case NACRE_SIGNAL_FETCH:
+        BUG_ON(!state);
+        return nacre_signal_frame_export(&state->signal, &state->mask, stack, buffer, regs);
+    case NACRE_SIGNAL_DONE:
+        BUG_ON(!state);
+        signal_setup_done(0, &state->signal, 0);
+        kfree(state);
+        current->thread.nacre_signal = NULL;
+        return 0;
+    case NACRE_SIGNAL_RETURN:
+        BUG_ON(state);
+        rc = nacre_signal_frame_restore(buffer, regs);
+        if (!rc) return 0;
+        fallthrough;
+    case NACRE_SIGNAL_BAD:
+        nacre_signal_release();
+        force_fatal_sig(SIGSEGV);
+        return -EFAULT;
+    default:
+        panic("NACRE invalid signal control operation\n");
+    }
 }
 
 void nacre_signal_release(void)
