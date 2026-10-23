@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/entry-common.h>
 #include <linux/mm.h>
+#include <linux/nacre_shmem.h>
 #include <linux/sched.h>
 #include <linux/ptrace.h>
 #include <linux/sched/signal.h>
@@ -21,6 +22,7 @@
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
 #define NACRE_GATE_USER_ACCESS 0x1001
+#define NACRE_GATE_FD_PRECHECK 0x1003
 
 /* Resolve a syscall operand without reading protected data or raising SIGSEGV. */
 static long nacre_user_access(unsigned long address, unsigned long permissions)
@@ -51,6 +53,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
+    case NACRE_GATE_FD_PRECHECK:
     case NACRE_GATE_SIGNAL:
     case NACRE_GATE_USER_ACCESS:
     case NACRE_GATE_BUFFER_GROW:
@@ -193,7 +196,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 		do_irq(regs);
 		break;
 	case EXC_SYSCALL:
-        if (kind == NACRE_GATE_SIGNAL) {
+        if (kind == NACRE_GATE_FD_PRECHECK) {
+            syscall_enter_from_user_mode(regs, -1);
+            regs->a0 = nacre_shmem_precheck(value, buffer, count);
+            syscall_exit_to_user_mode(regs);
+        } else if (kind == NACRE_GATE_SIGNAL) {
             syscall_enter_from_user_mode(regs, -1);
             regs->a0 = nacre_signal_control(value, buffer, count, regs);
             syscall_exit_to_user_mode(regs);

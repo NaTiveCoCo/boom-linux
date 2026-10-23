@@ -17,7 +17,9 @@
 #define SHMEM_MAXQUOTAS 2
 #endif
 
+struct nacre_shmem;
 struct shmem_inode_info {
+	struct nacre_shmem *nacre;
 	spinlock_t		lock;
 	unsigned int		seals;		/* shmem seals */
 	unsigned long		flags;

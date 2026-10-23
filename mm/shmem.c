@@ -34,6 +34,7 @@
 #include <linux/sched/signal.h>
 #include <linux/export.h>
 #include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <linux/swap.h>
 #include <linux/uio.h>
 #include <linux/hugetlb.h>
@@ -1189,6 +1190,8 @@ static int shmem_setattr(struct mnt_idmap *idmap,
 	bool update_mtime = false;
 	bool update_ctime = true;
 
+	if ((attr->ia_valid & ATTR_SIZE) && nacre_shmem_resize(inode))
+		return -EPERM;
 	error = setattr_prepare(idmap, dentry, attr);
 	if (error)
 		return error;
@@ -1265,6 +1268,7 @@ static void shmem_evict_inode(struct inode *inode)
 	struct shmem_sb_info *sbinfo = SHMEM_SB(inode->i_sb);
 	size_t freed = 0;
 
+	nacre_shmem_evict(inode);
 	if (shmem_mapping(inode->i_mapping)) {
 		shmem_unacct_size(info->flags, inode->i_size);
 		inode->i_size = 0;
@@ -2238,6 +2242,9 @@ static int shmem_get_folio_gfp(struct inode *inode, pgoff_t index,
 	bool alloced;
 	unsigned long orders = 0;
 
+	if (!(vmf && nacre_shmem_vma(vmf->vma)) && nacre_shmem_io(inode))
+		return -EPERM;
+
 	if (WARN_ON_ONCE(!shmem_mapping(inode->i_mapping)))
 		return -EINVAL;
 
@@ -2309,7 +2316,8 @@ repeat:
 	}
 
 	/* Find hugepage orders that are allowed for anonymous shmem and tmpfs. */
-	orders = shmem_allowable_huge_orders(inode, vma, index, write_end, false);
+	orders = nacre_shmem_protected(inode) ? 0 :
+		shmem_allowable_huge_orders(inode, vma, index, write_end, false);
 	if (orders > 0) {
 		gfp_t huge_gfp;
 
@@ -2721,6 +2729,12 @@ out_nomem:
 	return retval;
 }
 
+int shmem_nacre_get_folio(struct vm_fault *vmf, struct folio **folio)
+{
+    return shmem_get_folio_gfp(file_inode(vmf->vma->vm_file), vmf->pgoff,
+        0, folio, SGP_CACHE, mapping_gfp_mask(vmf->vma->vm_file->f_mapping), vmf, NULL);
+}
+
 static int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct inode *inode = file_inode(file);
@@ -2730,6 +2744,10 @@ static int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 	ret = seal_check_write(info->seals, vma);
 	if (ret)
 		return ret;
+
+	ret = nacre_shmem_mmap(file, vma);
+	if (ret)
+		return ret < 0 ? ret : 0;
 
 	file_accessed(file);
 	/* This is anonymous shared memory if it is unlinked at the time of mmap */
@@ -2855,6 +2873,8 @@ static struct inode *__shmem_get_inode(struct mnt_idmap *idmap,
 	}
 
 	lockdep_annotate_inode_mutex_key(inode);
+	err = dir ? nacre_shmem_create(inode) : 0;
+	if (err) { iput(inode); return ERR_PTR(err); }
 	return inode;
 }
 
@@ -3086,6 +3106,7 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	ssize_t retval = 0;
 	loff_t *ppos = &iocb->ki_pos;
 
+	if (nacre_shmem_io(inode)) return -EPERM;
 	index = *ppos >> PAGE_SHIFT;
 	offset = *ppos & ~PAGE_MASK;
 
@@ -3201,6 +3222,8 @@ static ssize_t shmem_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ssize_t ret;
 
 	inode_lock(inode);
+	ret = nacre_shmem_io(inode);
+	if (ret) goto unlock;
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
 		goto unlock;
@@ -3272,6 +3295,7 @@ static ssize_t shmem_file_splice_read(struct file *in, loff_t *ppos,
 	loff_t isize;
 	int error = 0;
 
+	if (nacre_shmem_io(inode)) return -EPERM;
 	/* Work out how much data we can actually add into the pipe */
 	used = pipe_occupancy(pipe->head, pipe->tail);
 	npages = max_t(ssize_t, pipe->max_usage - used, 0);
@@ -3381,6 +3405,7 @@ static long shmem_fallocate(struct file *file, int mode, loff_t offset,
 	pgoff_t start, index, end, undo_fallocend;
 	int error;
 
+	if (nacre_shmem_io(inode)) return -EPERM;
 	if (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE))
 		return -EOPNOTSUPP;
 

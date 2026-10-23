@@ -320,8 +320,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	/* Cover kernel mapping callers too, including SysV shmat and hugetlb files. */
 	if (nacre_mm_private(mm) &&
 	    ((flags & MAP_HUGETLB) || (file && is_file_hugepages(file)) ||
-         ((flags & MAP_SHARED) && (file || !(flags & MAP_ANONYMOUS) ||
-          prot != (PROT_READ | PROT_WRITE)))))
+         ((flags & MAP_SHARED) &&
+          ((file && (!shmem_file(file) || (prot & PROT_EXEC))) ||
+           (!file && (!(flags & MAP_ANONYMOUS) || prot != (PROT_READ | PROT_WRITE)))))))
 		return -EOPNOTSUPP;
 
 	/*

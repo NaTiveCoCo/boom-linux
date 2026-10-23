@@ -6,6 +6,7 @@
 #include <asm/nacc.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_ptp.h>
+#include <linux/nacre_shmem.h>
 #include <asm/sbi.h>
 
 #define PTP_ALLOC 3
@@ -82,7 +83,9 @@ void nacre_mm_discard(struct mm_struct *mm)
 {
     BUG_ON(!nacre_mm_managed(mm) || mm->context.nacre_prepared);
     /* All PTPs have returned before pgd_free; also covers construction without a PTP. */
+    unsigned long run = nacre_shmem_run(mm);
     BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, 0x42, __pa(mm->pgd), 0, 0, 0, 0, 0).error);
+    nacre_shmem_run_cleanup(run);
 }
 
 /*
@@ -202,7 +205,9 @@ bool nacre_agent_slot(struct mm_struct *mm, unsigned long addr)
 void nacre_root_retire(struct mm_struct *mm)
 {
 	BUG_ON(!nacre_mm_managed(mm) || !mm->context.nacre_prepared);
+	unsigned long run = nacre_shmem_run(mm);
 	checked(ROOT_RETIRE, __pa(mm->pgd), 0, 0, 0);
+	nacre_shmem_run_cleanup(run);
 	mm->context.nacre_prepared = 0;
 	asm volatile(".global nacre_root_retired\nnacre_root_retired: nop" ::: "memory");
 }

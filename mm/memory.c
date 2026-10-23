@@ -42,6 +42,7 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#include <linux/nacre_shmem.h>
 #include <linux/mm_inline.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/coredump.h>
@@ -5545,7 +5546,10 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	} else {
 		folio_add_file_rmap_ptes(folio, page, nr, vma);
 	}
-	if (nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_NACC_APP) &&
+	if (nacre_shmem_vma(vma)) {
+        VM_BUG_ON_FOLIO(nr != 1 || !PageNacre(page), folio);
+        nacre_shmem_map(vmf, pte_val(entry));
+    } else if (nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_NACC_APP) &&
         (vma->vm_flags & VM_SHARED) && vma_is_anon_shmem(vma)) {
         /* Eager population installs each fresh shmem page before fork can inherit it. */
         VM_BUG_ON_FOLIO(nr != 1 || PageNacre(page), folio);
