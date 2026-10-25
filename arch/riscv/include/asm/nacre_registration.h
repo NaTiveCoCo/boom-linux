@@ -48,6 +48,7 @@ struct mm_struct;
 struct task_struct;
 struct ksignal;
 bool nacre_signal_dispatch(struct pt_regs *regs);
+void nacre_signal_restart(struct pt_regs *regs);
 long nacre_signal_control(unsigned long operation, unsigned long buffer,
                           unsigned long stack, struct pt_regs *regs);
 

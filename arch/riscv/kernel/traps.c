@@ -362,14 +362,6 @@ void do_trap_ecall_u(struct pt_regs *regs)
 		
 		if (syscall >= 0 && syscall < NR_syscalls)
             syscall_handler(regs, syscall);
-        if (current->thread.nacre_flag == NACRE_HANDOFF) {
-            switch ((long)regs->a0) {
-            case -ERESTARTSYS: case -ERESTARTNOINTR:
-            case -ERESTARTNOHAND: case -ERESTART_RESTARTBLOCK:
-                regs->a0 = -EINTR;
-                break;
-            }
-        }
 
 		/*
 		 * Ultimately, this value will get limited by KSTACK_OFFSET_MAX(),

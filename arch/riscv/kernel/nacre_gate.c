@@ -156,6 +156,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         break;
     }
     case __NR_read:
+    case __NR_restart_syscall:
     case __NR_write:
     case __NR_exit:
     case __NR_exit_group:
@@ -181,6 +182,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     /* Handoff and buffer growth carry an AS request to M. */
     bool handoff = kind == __NR_clone || kind == __NR_execve || kind == NACRE_GATE_BUFFER_GROW;
     handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9);
+    /* AS renews the private-word authorization for a futex restart block. */
+    handoff |= kind == __NR_restart_syscall && value;
     instrumentation_begin();
     if (handoff) {
         struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 20, task_pid_vnr(current), 0, 0, 0, 0, 0);
@@ -214,7 +217,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
             regs->a0 = nacre_buffer_grow(value);
             syscall_exit_to_user_mode(regs);
         }
-        else do_trap_ecall_u(regs);
+        else {
+            do_trap_ecall_u(regs);
+            nacre_signal_restart(regs);
+        }
 		break;
 	case EXC_INST_PAGE_FAULT:
 	case EXC_LOAD_PAGE_FAULT:

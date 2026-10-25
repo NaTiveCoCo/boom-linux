@@ -16,6 +16,27 @@ struct nacre_signal_state {
     sigset_t mask;
 };
 
+/* Resolve native restart policy after signal selection. AS alone rewinds AU. */
+void nacre_signal_restart(struct pt_regs *regs)
+{
+    struct nacre_signal_state *state = current->thread.nacre_signal;
+    switch ((long)regs->a0) {
+    case -ERESTARTSYS:
+        if (state && !(state->signal.ka.sa.sa_flags & SA_RESTART))
+            regs->a0 = -EINTR;
+        break;
+    case -ERESTARTNOINTR:
+        regs->a0 = -ERESTARTSYS;
+        break;
+    case -ERESTARTNOHAND:
+        regs->a0 = state ? -EINTR : -ERESTARTSYS;
+        break;
+    case -ERESTART_RESTARTBLOCK:
+        if (state) regs->a0 = -EINTR;
+        break;
+    }
+}
+
 bool nacre_signal_dispatch(struct pt_regs *regs)
 {
     struct ksignal signal;
