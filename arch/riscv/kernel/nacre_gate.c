@@ -117,6 +117,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_chdir:
     case __NR_unlinkat:
     case __NR_flock:
+    case __NR_umask:
     case __NR_mknodat:
     case __NR_fstatfs:
     case __NR_truncate:
