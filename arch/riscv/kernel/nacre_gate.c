@@ -23,6 +23,7 @@
 #define NACRE_GATE_BUFFER_GROW 0x1000
 #define NACRE_GATE_USER_ACCESS 0x1001
 #define NACRE_GATE_FD_PRECHECK 0x1003
+#define NACRE_GATE_XATTR 0x1004
 
 /* Resolve a syscall operand without reading protected data or raising SIGSEGV. */
 static long nacre_user_access(unsigned long address, unsigned long permissions)
@@ -59,6 +60,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case NACRE_GATE_BUFFER_GROW:
         regs->cause = EXC_SYSCALL;
         break;
+    case NACRE_GATE_XATTR:
+        /* The explicit syscall number cannot be confused with a page fault. */
+        BUG_ON(buffer < __NR_setxattr || buffer > __NR_fremovexattr);
+        kind = buffer;
+        fallthrough;
     case __NR_getcwd:
     case __NR_futex:
     case __NR_set_tid_address:
