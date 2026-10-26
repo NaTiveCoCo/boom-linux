@@ -124,6 +124,17 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_setgid:
     case __NR_setuid:
     case __NR_setgroups:
+    case __NR_getgroups:
+    case __NR_setreuid:
+    case __NR_setregid:
+    case __NR_setresuid:
+    case __NR_setresgid:
+    case __NR_getresuid:
+    case __NR_getresgid:
+    case __NR_setfsuid:
+    case __NR_setfsgid:
+    case __NR_mount:
+    case __NR_umount2:
     case __NR_prctl:
     case __NR_connect:
     case __NR_accept4:
