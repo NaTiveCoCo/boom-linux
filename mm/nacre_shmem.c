@@ -94,17 +94,18 @@ int nacre_shmem_mmap(struct file *file, struct vm_area_struct *vma)
     struct nacre_shmem *o = SHMEM_I(inode)->nacre;
     unsigned long run;
     int rc = 0;
-    if (!o) return nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_SHARED) ? -EOPNOTSUPP : 0;
+    /* MAP_SHARED on an O_RDONLY file retains VM_MAYSHARE, not VM_SHARED. */
+    if (!o) return nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_MAYSHARE) ? -EOPNOTSUPP : 0;
     inode_lock(inode);
     mutex_lock(&objects_lock);
-    if (!nacre_mm_private(vma->vm_mm) || !(vma->vm_flags & VM_SHARED)) {
+    if (!nacre_mm_private(vma->vm_mm) || !(vma->vm_flags & VM_MAYSHARE)) {
         if (o->handle) rc = -EPERM;
         else o->eligible = false;
         goto out;
     }
     run = nacre_shmem_run(vma->vm_mm);
     if (o->dead || !run || run != o->run || !o->eligible ||
-        !(vma->vm_flags & VM_SHARED) || (vma->vm_flags & VM_EXEC) ||
+        !(vma->vm_flags & VM_MAYSHARE) || (vma->vm_flags & VM_EXEC) ||
         i_size_read(inode) <= 0 || i_size_read(inode) > (1UL << 38) ||
         vma->vm_pgoff >= DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE) ||
         vma_pages(vma) > DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE) - vma->vm_pgoff) {
