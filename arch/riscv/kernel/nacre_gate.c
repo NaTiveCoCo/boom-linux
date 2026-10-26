@@ -100,6 +100,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_fstat:
     case __NR_execve:
     case __NR_rt_sigprocmask:
+    case __NR_rt_sigpending:
     case __NR_clone:
     case __NR_wait4:
     case __NR_rt_sigaction:

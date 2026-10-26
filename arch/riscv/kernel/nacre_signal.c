@@ -43,7 +43,12 @@ bool nacre_signal_dispatch(struct pt_regs *regs)
     if (current->thread.nacre_flag != NACRE_HANDOFF &&
         current->thread.nacre_flag != NACRE_FORK_CHILD) return false;
     /* Internal frame preparation may fault/schedule before delivery commits. */
-    if (current->thread.nacre_signal) return true;
+    if (current->thread.nacre_signal) {
+        /* Let AS publish the selected frame before selecting another signal.
+         * The pending queues stay intact and DONE recalculates this work flag. */
+        clear_thread_flag(TIF_SIGPENDING);
+        return true;
+    }
     if (get_signal(&signal)) {
         struct nacre_signal_state *state = kzalloc(sizeof(*state), GFP_KERNEL);
         BUG_ON(!state);
@@ -71,6 +76,10 @@ long nacre_signal_control(unsigned long operation, unsigned long buffer,
         signal_setup_done(0, &state->signal, 0);
         kfree(state);
         current->thread.nacre_signal = NULL;
+        /* Even SA_NODEFER with an unchanged mask must re-arm deferred work. */
+        spin_lock_irq(&current->sighand->siglock);
+        recalc_sigpending();
+        spin_unlock_irq(&current->sighand->siglock);
         return 0;
     case NACRE_SIGNAL_RETURN:
         BUG_ON(state);
