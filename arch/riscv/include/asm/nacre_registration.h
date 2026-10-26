@@ -57,6 +57,7 @@ int nacre_fork_mm_prepare(struct mm_struct *mm);
 void nacre_fork_publish(struct task_struct *child);
 void nacre_buffer_thread_prepare(struct task_struct *child);
 void nacre_buffer_release(void);
+void nacre_buffer_release_locked(void);
 void nacre_activate(void);
 void nacre_fork_child_return(void);
 void nacre_fork_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);

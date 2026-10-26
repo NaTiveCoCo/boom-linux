@@ -72,7 +72,7 @@ void nacre_mm_init(struct mm_struct *mm, bool fork)
 	mm->context.nacre_cid = current->thread.nacre_cid;
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, fork ? 0x40 : 0x43,
-                        __pa(mm->pgd), 0, 0, 0, 0, 0).error);
+                        __pa(mm->pgd), fork ? 0 : task_pid_vnr(current), 0, 0, 0, 0).error);
         /* Exec constructs new public ELF pages, then seals them before AS entry. */
         mm->context.nacre_private = fork;
     }

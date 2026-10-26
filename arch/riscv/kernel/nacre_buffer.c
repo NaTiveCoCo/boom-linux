@@ -193,22 +193,28 @@ void nacre_buffer_thread_prepare(struct task_struct *child)
 }
 
 /* The M task is already revoked; siblings retain their own VMA leases. */
-void nacre_buffer_release(void)
+void nacre_buffer_release_locked(void)
 {
     struct mm_struct *mm = current->mm;
     unsigned long address = current->thread.nacre_buffer, size;
+    mmap_assert_write_locked(mm);
     BUG_ON(!address);
-    /* Exit must finish revoking the lease even when exit_group has queued
-     * a fatal signal. vm_munmap() takes a killable lock and can return EINTR. */
-    mmap_write_lock(mm);
     struct vm_area_struct *vma = find_vma(mm, address);
     BUG_ON(!vma || vma->vm_start != address || !nacre_buffer_vma(vma));
     size = vma->vm_end - address;
     BUG_ON(do_munmap(mm, address, size, NULL));
-    mmap_write_unlock(mm);
     current->thread.nacre_buffer = 0;
     BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_TASK_DETACH,
                      task_pid_vnr(current), 0, 0, 0, 0, 0).error);
+}
+
+void nacre_buffer_release(void)
+{
+    /* Exit must finish revoking the lease even when exit_group has queued
+     * a fatal signal. vm_munmap() takes a killable lock and can return EINTR. */
+    mmap_write_lock(current->mm);
+    nacre_buffer_release_locked();
+    mmap_write_unlock(current->mm);
 }
 
 int nacre_bind_initial(unsigned long buffer, unsigned long capacity)

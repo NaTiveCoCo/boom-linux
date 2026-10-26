@@ -1021,6 +1021,13 @@ static int exec_mmap(struct mm_struct *mm)
 		 * whose default action is to create a coredump get
 		 * out and die instead of going through with the exec.
 		 */
+#ifdef CONFIG_RISCV
+        /* Private exec removes its task lease before switching mm. The commit
+         * hook downgrades this lock to match the native read-unlock below. */
+        if (tsk->thread.nacre_flag == NACRE_HANDOFF)
+            ret = mmap_write_lock_killable(old_mm);
+        else
+#endif
 		ret = mmap_read_lock_killable(old_mm);
 		if (ret) {
 			up_write(&tsk->signal->exec_update_lock);

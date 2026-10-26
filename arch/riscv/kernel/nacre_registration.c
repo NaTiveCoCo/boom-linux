@@ -216,20 +216,11 @@ void nacre_exec_commit(void)
     if (current->thread.nacre_flag != NACRE_HANDOFF) return;
     unsigned long cid = current->thread.nacre_cid;
     BUG_ON(!nacre_cancel());
-    /* exec_mmap holds old_mm's read lock; exit_mmap will release its last lease. */
-    current->thread.nacre_buffer = 0;
+    /* Revoke only this task's lease while the parent may still own the old mm. */
+    nacre_buffer_release_locked();
+    downgrade_write(&current->mm->mmap_lock);
     /* The new ELF follows the initial registration path with the same identity. */
     current->thread.nacre_cid = cid;
     current->thread.nacre_flag = NACRE_REQUESTED;
 }
 
-/* Retire the old root before new ELF allocations can reuse its public PFNs. */
-void nacre_exec_mmput(struct mm_struct *mm)
-{
-    BUG_ON(!mm->context.nacre_prepared || atomic_read(&mm->mm_users) != 1);
-    /* Keep the root object alive across exit_mmap, independently of lazy mm refs. */
-    mmgrab(mm);
-    mmput(mm);
-    nacre_root_retire(mm);
-    mmdrop(mm);
-}

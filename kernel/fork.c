@@ -1371,6 +1371,21 @@ static inline void __mmput(struct mm_struct *mm)
 	mmdrop(mm);
 }
 
+#ifdef CONFIG_RISCV
+/* Retire the old root before new ELF allocations can reuse its public PFNs. */
+void nacre_exec_mmput(struct mm_struct *mm)
+{
+    BUG_ON(!mm->context.nacre_prepared);
+    /* Use the native last-user decision; a vfork parent can retain this mm. */
+    if (!atomic_dec_and_test(&mm->mm_users)) return;
+    /* Keep the root object alive across exit_mmap, independently of lazy mm refs. */
+    mmgrab(mm);
+    __mmput(mm);
+    nacre_root_retire(mm);
+    mmdrop(mm);
+}
+#endif
+
 /*
  * Decrement the use count and release all resources for an mm.
  */
@@ -2789,7 +2804,11 @@ pid_t kernel_clone(struct kernel_clone_args *args)
         bool raw = clone_flags == NACRE_THREAD_FLAGS && !args->parent_tid && !args->child_tid;
         bool pthread = clone_flags == NACRE_PTHREAD_FLAGS && args->parent_tid && args->child_tid;
         bool thread = (raw || pthread) && !args->exit_signal && args->stack && args->tls;
-        if ((!ordinary && !thread) || (ordinary && !thread_group_empty(current)))
+        bool vfork = clone_flags == (CLONE_VM | CLONE_VFORK) &&
+                     args->exit_signal == SIGCHLD && args->stack && !args->tls &&
+                     !args->parent_tid && !args->child_tid;
+        if ((!ordinary && !thread && !vfork) ||
+            ((ordinary || vfork) && !thread_group_empty(current)))
             return -EOPNOTSUPP;
     }
 #endif
