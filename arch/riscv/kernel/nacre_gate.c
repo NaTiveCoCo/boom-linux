@@ -89,6 +89,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_clock_gettime:
     case __NR_setpgid:
     case __NR_kill:
+    case __NR_tgkill:
+    case __NR_faccessat:
+    case __NR_getdents64:
+    case __NR_capget:
+    case __NR_capset:
     case __NR_ppoll:
     case __NR_newfstatat:
     case __NR_fstat:
