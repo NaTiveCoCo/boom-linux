@@ -6,6 +6,8 @@
 #include <linux/mman.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
+#include <linux/export.h>
+#include <linux/pipe_fs_i.h>
 #include <asm/nacre_ptp.h>
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
@@ -76,6 +78,7 @@ int nacre_shmem_io(struct inode *inode)
     mutex_unlock(&objects_lock);
     return rc;
 }
+EXPORT_SYMBOL_GPL(nacre_shmem_io);
 
 /* Called under i_rwsem, as is mmap admission below. Candidate sizing is allowed. */
 int nacre_shmem_resize(struct inode *inode)
@@ -243,13 +246,26 @@ void nacre_shmem_evict(struct inode *inode)
     kfree(o);
 }
 
-long nacre_shmem_precheck(unsigned long fd, unsigned long second, bool two)
+long nacre_shmem_precheck(unsigned long fd, unsigned long second, unsigned long flags)
 {
-    struct fd f = fdget(fd);
+    struct fd f;
+    /* Splice checks pipe offsets before reading either private offset operand. */
+    BUG_ON((flags & ~7UL) || ((flags & 6) && !(flags & 1)));
+    if (flags & 6) {
+        struct fd input = fdget(fd), output = fdget(second);
+        long error = 0;
+        if (!fd_file(input) || !fd_file(output)) error = -EBADF;
+        else if (((flags & 2) && get_pipe_info(fd_file(input), true)) ||
+                 ((flags & 4) && get_pipe_info(fd_file(output), true))) error = -ESPIPE;
+        fdput(output);
+        fdput(input);
+        if (error) return error;
+    }
+    f = fdget(fd);
     long rc;
     if (!fd_file(f)) return -EBADF;
     rc = shmem_file(fd_file(f)) ? nacre_shmem_io(file_inode(fd_file(f))) : 0;
     fdput(f);
-    if (!rc && two) rc = nacre_shmem_precheck(second, 0, false);
+    if (!rc && (flags & 1)) rc = nacre_shmem_precheck(second, 0, 0);
     return rc;
 }

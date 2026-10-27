@@ -6,6 +6,8 @@
 #include <linux/moduleparam.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <linux/pagemap.h>
 #include <linux/file.h>
 #include <linux/stat.h>
@@ -589,6 +591,11 @@ static int loop_change_fd(struct loop_device *lo, struct block_device *bdev,
 
 	if (!file)
 		return -EBADF;
+	/* Inspect the held backing file before binding it to a public block device. */
+	if (shmem_file(file) && nacre_shmem_io(file_inode(file))) {
+		fput(file);
+		return -EPERM;
+	}
 
 	/* suppress uevents while reconfiguring the device */
 	dev_set_uevent_suppress(disk_to_dev(lo->lo_disk), 1);
@@ -1027,6 +1034,11 @@ static int loop_configure(struct loop_device *lo, blk_mode_t mode,
 
 	if (!file)
 		return -EBADF;
+	/* Inspect the held backing file before binding it to a public block device. */
+	if (shmem_file(file) && nacre_shmem_io(file_inode(file))) {
+		fput(file);
+		return -EPERM;
+	}
 	is_loop = is_loop_device(file);
 
 	/* This is safe, since we have a reference from open(). */

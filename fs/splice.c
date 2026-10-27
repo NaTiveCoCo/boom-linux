@@ -21,6 +21,8 @@
 #include <linux/bvec.h>
 #include <linux/fs.h>
 #include <linux/file.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <linux/pagemap.h>
 #include <linux/splice.h>
 #include <linux/memcontrol.h>
@@ -1313,6 +1315,11 @@ ssize_t do_splice(struct file *in, loff_t *off_in, struct file *out,
 	struct pipe_inode_info *opipe;
 	loff_t offset;
 	ssize_t ret;
+
+	/* Check held objects before a filesystem can expose or modify private pages. */
+	if ((shmem_file(in) && nacre_shmem_io(file_inode(in))) ||
+	    (shmem_file(out) && nacre_shmem_io(file_inode(out))))
+		return -EPERM;
 
 	if (unlikely(!(in->f_mode & FMODE_READ) ||
 		     !(out->f_mode & FMODE_WRITE)))

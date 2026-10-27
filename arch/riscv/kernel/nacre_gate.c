@@ -20,6 +20,8 @@
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
 #include <linux/fcntl.h>
+#include <linux/poll.h>
+#include <linux/loop.h>
 #include <uapi/linux/sched/types.h>
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
@@ -109,7 +111,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_sched_get_priority_max:
     case __NR_sched_get_priority_min:
     case __NR_sched_rr_get_interval:
+    case __NR_sched_getattr:
     case __NR_tkill:
+    case __NR_splice:
+    case __NR_tee:
     case __NR_copy_file_range:
     case __NR_getitimer:
     case __NR_timer_create:
@@ -132,6 +137,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_pidfd_open:
     case __NR_close_range:
     case __NR_unshare:
+    case __NR_setns:
     case __NR_kill:
     case __NR_tgkill:
     case __NR_faccessat:
@@ -162,6 +168,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_epoll_create1:
     case __NR_epoll_ctl:
     case __NR_epoll_pwait:
+    case __NR_epoll_pwait2:
     case __NR_mkdirat:
     case __NR_statfs:
     case __NR_chdir:
@@ -211,6 +218,12 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_setfsgid:
     case __NR_mount:
     case __NR_umount2:
+    case __NR_open_tree:
+    case __NR_move_mount:
+    case __NR_fsopen:
+    case __NR_fsconfig:
+    case __NR_fsmount:
+    case __NR_fspick:
     case __NR_prctl:
     case __NR_connect:
     case __NR_accept4:
@@ -234,6 +247,20 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(offsetof(struct flock, l_pid) == 24);
         static_assert(sizeof(struct f_owner_ex) == 8);
         static_assert(sizeof(struct epoll_event) == 16);
+        static_assert(sizeof(sigset_t) == 8);
+        static_assert(sizeof(struct pollfd) == 8);
+        static_assert(sizeof(struct loop_info) == 160);
+        static_assert(offsetof(struct loop_info, lo_offset) == 20);
+        static_assert(offsetof(struct loop_info, lo_flags) == 32);
+        static_assert(offsetof(struct loop_info, lo_name) == 36);
+        static_assert(sizeof(struct loop_info64) == 232);
+        static_assert(offsetof(struct loop_info64, lo_offset) == 24);
+        static_assert(offsetof(struct loop_info64, lo_encrypt_type) == 44);
+        static_assert(offsetof(struct loop_info64, lo_file_name) == 56);
+        static_assert(sizeof(struct loop_config) == 304);
+        static_assert(offsetof(struct loop_config, info) == 8);
+        static_assert(offsetof(struct pollfd, events) == 4);
+        static_assert(offsetof(struct pollfd, revents) == 6);
         static_assert(sizeof(struct rlimit64) == 16);
         static_assert(sizeof(struct rusage) == 144);
         static_assert(sizeof(struct sigevent) == 64);
@@ -244,6 +271,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(offsetof(siginfo_t, si_status) == 24);
         static_assert(sizeof(struct __kernel_itimerspec) == 32);
         static_assert(sizeof(struct sched_param) == 4);
+        static_assert(sizeof(struct sched_attr) == 56);
         static_assert(NR_CPUS <= 64);
         static_assert(sizeof(struct __kernel_timespec) == 16);
         static_assert(sizeof(struct __kernel_old_itimerval) == 32);

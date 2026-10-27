@@ -14,6 +14,8 @@
 #include <linux/anon_inodes.h>
 #include <linux/namei.h>
 #include <linux/file.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <uapi/linux/mount.h>
 #include "internal.h"
 #include "mount.h"
@@ -461,6 +463,12 @@ SYSCALL_DEFINE5(fsconfig,
 		param.file = fget(aux);
 		if (!param.file)
 			goto out_key;
+		/* A deferred filesystem parameter must never retain a protected content source. */
+		if (shmem_file(param.file) && nacre_shmem_io(file_inode(param.file))) {
+			fput(param.file);
+			ret = -EPERM;
+			goto out_key;
+		}
 		param.dirfd = aux;
 		break;
 	default:
