@@ -91,6 +91,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_sendfile:
     case __NR_pselect6:
     case __NR_setitimer:
+    case __NR_signalfd4:
+    case __NR_timerfd_create:
+    case __NR_timerfd_settime:
+    case __NR_timerfd_gettime:
     case __NR_clock_nanosleep:
     case __NR_clock_gettime:
     case __NR_setpgid:
