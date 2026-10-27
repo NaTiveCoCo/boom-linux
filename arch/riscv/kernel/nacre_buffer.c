@@ -12,8 +12,9 @@
 #include <asm/nacc.h>
 #include <asm/vdso.h>
 
-/* Maximum VA window; only the first page is claimed at exec/fork. */
-static unsigned long buffer_pages = 256;
+/* Reserve scalar I/O's original page offset in addition to a one-MiB payload.
+ * Only the first page is claimed at exec/fork; growth remains demand driven. */
+static unsigned long buffer_pages = 257;
 module_param_named(nacre_buffer_pages, buffer_pages, ulong, 0400);
 
 struct buffer_pool {

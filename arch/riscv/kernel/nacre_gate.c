@@ -19,6 +19,7 @@
 #include <linux/socket.h>
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
+#include <linux/fcntl.h>
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
 #define NACRE_GATE_USER_ACCESS 0x1001
@@ -97,7 +98,14 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_timerfd_gettime:
     case __NR_clock_nanosleep:
     case __NR_clock_gettime:
+    case __NR_clock_getres:
     case __NR_setpgid:
+    case __NR_getpgid:
+    case __NR_getsid:
+    case __NR_setsid:
+    case __NR_pidfd_open:
+    case __NR_close_range:
+    case __NR_unshare:
     case __NR_kill:
     case __NR_tgkill:
     case __NR_faccessat:
@@ -195,6 +203,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(sizeof(struct new_utsname) == 390);
         static_assert(sizeof(struct user_msghdr) == 56);
         static_assert(sizeof(struct iovec) == 16);
+        static_assert(sizeof(struct flock) == 32);
+        static_assert(offsetof(struct flock, l_start) == 8);
+        static_assert(offsetof(struct flock, l_pid) == 24);
+        static_assert(sizeof(struct f_owner_ex) == 8);
         static_assert(sizeof(struct epoll_event) == 16);
         static_assert(sizeof(struct rlimit64) == 16);
         static_assert(sizeof(struct rusage) == 144);
