@@ -148,6 +148,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_utimensat:
     case __NR_lseek:
     case __NR_writev:
+    case __NR_readv:
+    case __NR_preadv:
+    case __NR_pwritev:
+    case __NR_preadv2:
+    case __NR_pwritev2:
     case __NR_rt_sigsuspend:
     case __NR_setgid:
     case __NR_setuid:
