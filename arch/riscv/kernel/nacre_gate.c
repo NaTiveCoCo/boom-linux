@@ -101,6 +101,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_capget:
     case __NR_capset:
     case __NR_ppoll:
+    case __NR_statx:
+    case __NR_inotify_init1:
+    case __NR_inotify_add_watch:
+    case __NR_inotify_rm_watch:
     case __NR_newfstatat:
     case __NR_readlinkat:
     case __NR_fstat:
