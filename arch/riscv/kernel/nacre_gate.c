@@ -134,6 +134,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_fchown:
     case __NR_sync:
     case __NR_fsync:
+    case __NR_sync_file_range:
     case __NR_fdatasync:
     case __NR_syncfs:
     case __NR_faccessat2:
