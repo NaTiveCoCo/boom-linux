@@ -2799,8 +2799,12 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	pid_t nacc_nr;
 
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
-        bool ordinary = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
-                        args->exit_signal == SIGCHLD && !args->stack && !args->tls && !args->parent_tid;
+        bool libc_fork = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
+                         !args->stack && !args->tls && !args->parent_tid;
+        /* CLONE_FILES shares Linux's FD table, while each task still owns a COW root. */
+        bool cow_clone = (clone_flags == 0 || clone_flags == CLONE_FILES) &&
+                         !args->tls && !args->parent_tid && !args->child_tid;
+        bool ordinary = (libc_fork || cow_clone) && args->exit_signal == SIGCHLD;
         bool raw = clone_flags == NACRE_THREAD_FLAGS && !args->parent_tid && !args->child_tid;
         bool pthread = clone_flags == NACRE_PTHREAD_FLAGS && args->parent_tid && args->child_tid;
         bool thread = (raw || pthread) && !args->exit_signal && args->stack && args->tls;

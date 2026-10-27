@@ -11,6 +11,8 @@
 #include <linux/kernel.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/backing-dev.h>
@@ -179,6 +181,10 @@ EXPORT_SYMBOL(generic_fadvise);
 
 int vfs_fadvise(struct file *file, loff_t offset, loff_t len, int advice)
 {
+	/* Use the held object, including when an FD changed after the gate precheck. */
+	if (shmem_file(file) && nacre_shmem_io(file_inode(file)))
+		return -EPERM;
+
 	if (file->f_op->fadvise)
 		return file->f_op->fadvise(file, offset, len, advice);
 

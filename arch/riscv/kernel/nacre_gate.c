@@ -20,6 +20,7 @@
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
 #include <linux/fcntl.h>
+#include <uapi/linux/sched/types.h>
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
 #define NACRE_GATE_USER_ACCESS 0x1001
@@ -99,6 +100,31 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_clock_nanosleep:
     case __NR_clock_gettime:
     case __NR_clock_getres:
+    case __NR_sched_setparam:
+    case __NR_sched_setscheduler:
+    case __NR_sched_getscheduler:
+    case __NR_sched_getparam:
+    case __NR_sched_setaffinity:
+    case __NR_sched_getaffinity:
+    case __NR_sched_get_priority_max:
+    case __NR_sched_get_priority_min:
+    case __NR_sched_rr_get_interval:
+    case __NR_tkill:
+    case __NR_copy_file_range:
+    case __NR_getitimer:
+    case __NR_timer_create:
+    case __NR_timer_gettime:
+    case __NR_timer_getoverrun:
+    case __NR_timer_settime:
+    case __NR_timer_delete:
+    case __NR_clock_settime:
+    case __NR_rt_sigtimedwait:
+    case __NR_waitid:
+    case __NR_getcpu:
+    case __NR_getpriority:
+    case __NR_setpriority:
+    case __NR_fadvise64:
+    case __NR_fallocate:
     case __NR_setpgid:
     case __NR_getpgid:
     case __NR_getsid:
@@ -210,6 +236,15 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(sizeof(struct epoll_event) == 16);
         static_assert(sizeof(struct rlimit64) == 16);
         static_assert(sizeof(struct rusage) == 144);
+        static_assert(sizeof(struct sigevent) == 64);
+        static_assert(offsetof(struct sigevent, sigev_notify) == 12);
+        static_assert(offsetof(struct sigevent, sigev_notify_thread_id) == 16);
+        static_assert(sizeof(siginfo_t) == 128);
+        static_assert(offsetof(siginfo_t, si_pid) == 16);
+        static_assert(offsetof(siginfo_t, si_status) == 24);
+        static_assert(sizeof(struct __kernel_itimerspec) == 32);
+        static_assert(sizeof(struct sched_param) == 4);
+        static_assert(NR_CPUS <= 64);
         static_assert(sizeof(struct __kernel_timespec) == 16);
         static_assert(sizeof(struct __kernel_old_itimerval) == 32);
         /* The fixed argument area and pointees are in the sealed public buffer. */

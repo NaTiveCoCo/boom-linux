@@ -20,6 +20,8 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -1580,6 +1582,11 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	ssize_t ret;
 	bool splice = flags & COPY_FILE_SPLICE;
 	bool samesb = file_inode(file_in)->i_sb == file_inode(file_out)->i_sb;
+
+	/* Check the held file objects before any copy/remap implementation can read pages. */
+	if ((shmem_file(file_in) && nacre_shmem_io(file_inode(file_in))) ||
+	    (shmem_file(file_out) && nacre_shmem_io(file_inode(file_out))))
+		return -EPERM;
 
 	if (flags & ~COPY_FILE_SPLICE)
 		return -EINVAL;
