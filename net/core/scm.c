@@ -27,6 +27,8 @@
 #include <linux/slab.h>
 #include <linux/errqueue.h>
 #include <linux/io_uring.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 
 #include <linux/uaccess.h>
 
@@ -116,6 +118,11 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 		if (io_is_uring_fops(file)) {
 			fput(file);
 			return -EINVAL;
+		}
+		/* Inspect the held file before a rights message can export its contents. */
+		if (shmem_file(file) && nacre_shmem_io(file_inode(file))) {
+			fput(file);
+			return -EPERM;
 		}
 		if (unix_get_socket(file))
 			fpl->count_unix++;

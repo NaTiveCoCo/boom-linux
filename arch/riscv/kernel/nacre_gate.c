@@ -53,6 +53,17 @@ static long nacre_user_access(unsigned long address, unsigned long permissions)
     return rc;
 }
 
+/* Guaranteed-negative namespace clones do not carry an M creation request. */
+static __always_inline bool nacre_clone_needs_handoff(unsigned long flags)
+{
+    unsigned int signal = (unsigned int)flags & CSIGNAL;
+    unsigned int namespace = (unsigned int)flags & ~CSIGNAL;
+    return !((signal == 0 || signal == SIGCHLD) &&
+        (namespace == CLONE_NEWPID || namespace == CLONE_NEWCGROUP ||
+         namespace == CLONE_NEWIPC || namespace == CLONE_NEWNET ||
+         namespace == CLONE_NEWNS || namespace == CLONE_NEWUTS));
+}
+
 /* Each native handler owns its user-entry/exit accounting and scheduling. */
 asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid,
 					  struct pt_regs *regs, unsigned long kind,
@@ -394,7 +405,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     }
 	instrumentation_end();
     /* Handoff and buffer growth carry an AS request to M. */
-    bool handoff = kind == __NR_clone || kind == __NR_execve || kind == __NR_execveat || kind == NACRE_GATE_BUFFER_GROW;
+    bool handoff = (kind == __NR_clone && nacre_clone_needs_handoff(regs->a0)) || kind == __NR_execve || kind == __NR_execveat || kind == NACRE_GATE_BUFFER_GROW;
     handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9 || (regs->a1 & 127) == 4);
     /* AS renews the private-word authorization for a futex restart block. */
     handoff |= kind == __NR_restart_syscall && value;
