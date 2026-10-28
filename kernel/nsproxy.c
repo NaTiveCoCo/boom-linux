@@ -571,8 +571,8 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 		goto out;
 
 #ifdef NACC
-	/* Only reviewed nsfs views are admitted; resolve type=0 before the PID guard. */
-	if (nacre_mm_private(current->mm) && (!ns || (flags & CLONE_NEWPID))) {
+	/* A pidfd may install several namespace types; only reviewed nsfs views enter. */
+	if (nacre_mm_private(current->mm) && !ns) {
 		err = -EOPNOTSUPP;
 		goto out;
 	}
@@ -586,6 +586,12 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 		err = validate_ns(&nsset, ns);
 	else
 		err = validate_nsset(&nsset, pidfd_pid(fd_file(f)));
+#ifdef NACC
+	/* pidns_install validates capabilities/ancestry on this temporary nsset.
+	 * Preserve its native errors, but never commit a private task's PID binding. */
+	if (!err && nacre_mm_private(current->mm) && (flags & CLONE_NEWPID))
+		err = -EOPNOTSUPP;
+#endif
 	if (!err) {
 		commit_nsset(&nsset);
 		perf_event_namespaces(current);

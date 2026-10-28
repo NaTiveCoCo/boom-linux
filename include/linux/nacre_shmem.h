@@ -18,7 +18,8 @@ void nacre_shmem_evict(struct inode *inode);
 void nacre_shmem_run_cleanup(unsigned long run);
 unsigned long nacre_shmem_run(struct mm_struct *mm);
 void nacre_shmem_map(struct vm_fault *vmf, unsigned long value);
-/* Flags: bit0 checks both FDs; bits1/2 mark splice input/output offsets. */
+/* Flags: bit0 checks both FDs; bits1/2 mark splice input/output offsets.
+ * Single-FD modes: 8 requires a socket; 16 checks descriptor existence only. */
 long nacre_shmem_precheck(unsigned long fd, unsigned long second, unsigned long flags);
 #else
 static inline int nacre_shmem_create(struct inode *i) { return 0; }

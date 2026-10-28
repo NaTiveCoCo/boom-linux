@@ -16,6 +16,8 @@
 #include <linux/fs.h>
 #include <linux/dax.h>
 #include <linux/overflow.h>
+#include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -380,6 +382,16 @@ loff_t vfs_clone_file_range(struct file *file_in, loff_t pos_in,
 	loff_t ret;
 
 	WARN_ON_ONCE(remap_flags & REMAP_FILE_DEDUP);
+
+#ifdef NACC
+	/* Held file references, before filesystem callbacks can copy private contents. */
+	ret = shmem_file(file_in) ? nacre_shmem_io(file_inode(file_in)) : 0;
+	if (ret)
+		return ret;
+	ret = shmem_file(file_out) ? nacre_shmem_io(file_inode(file_out)) : 0;
+	if (ret)
+		return ret;
+#endif
 
 	if (file_inode(file_in)->i_sb != file_inode(file_out)->i_sb)
 		return -EXDEV;

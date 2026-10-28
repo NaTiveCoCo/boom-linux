@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Linux owns inode/folio lifetime; the Monitor owns contents and protection. */
 #include <linux/nacre_shmem.h>
+#include <linux/net.h>
 #include <linux/shmem_fs.h>
 #include <linux/slab.h>
 #include <linux/mman.h>
@@ -250,7 +251,8 @@ long nacre_shmem_precheck(unsigned long fd, unsigned long second, unsigned long 
 {
     struct fd f;
     /* Splice checks pipe offsets before reading either private offset operand. */
-    BUG_ON((flags & ~7UL) || ((flags & 6) && !(flags & 1)));
+    BUG_ON(flags != 8 && flags != 16 &&
+           ((flags & ~7UL) || ((flags & 6) && !(flags & 1))));
     if (flags & 6) {
         struct fd input = fdget(fd), output = fdget(second);
         long error = 0;
@@ -264,7 +266,9 @@ long nacre_shmem_precheck(unsigned long fd, unsigned long second, unsigned long 
     f = fdget(fd);
     long rc;
     if (!fd_file(f)) return -EBADF;
-    rc = shmem_file(fd_file(f)) ? nacre_shmem_io(file_inode(fd_file(f))) : 0;
+    if (flags == 8) rc = sock_from_file(fd_file(f)) ? 0 : -ENOTSOCK;
+    else if (flags == 16) rc = 0; /* Metadata ioctl: no content access in this check. */
+    else rc = shmem_file(fd_file(f)) ? nacre_shmem_io(file_inode(fd_file(f))) : 0;
     fdput(f);
     if (!rc && (flags & 1)) rc = nacre_shmem_precheck(second, 0, 0);
     return rc;

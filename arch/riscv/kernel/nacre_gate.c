@@ -177,12 +177,16 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_getcpu:
     case __NR_getpriority:
     case __NR_setpriority:
+    case __NR_readahead:
     case __NR_fadvise64:
     case __NR_fallocate:
     case __NR_setpgid:
     case __NR_getpgid:
     case __NR_getsid:
     case __NR_setsid:
+    case __NR_name_to_handle_at:
+    case __NR_clone3:
+    case __NR_get_robust_list:
     case __NR_mincore:
     case __NR_kcmp:
     case __NR_pidfd_getfd:
@@ -239,6 +243,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_chroot:
     case __NR_fchmod:
     case __NR_fchown:
+    case __NR_vhangup:
     case __NR_sync:
     case __NR_fsync:
     case __NR_sync_file_range:

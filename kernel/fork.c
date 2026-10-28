@@ -48,6 +48,7 @@
 #include <linux/memblock.h>
 #include <linux/nsproxy.h>
 #include <linux/capability.h>
+#include <linux/pid_namespace.h>
 #include <linux/cpu.h>
 #include <linux/cgroup.h>
 #include <linux/security.h>
@@ -2787,6 +2788,25 @@ struct task_struct *create_io_thread(int (*fn)(void *), void *arg, int node)
  *
  * args->exit_signal is expected to be checked for sanity by the caller.
  */
+#ifdef NACC
+/* Preserve earlier native capability errors without creating unsupported tasks. */
+static int nacre_clone_reject(struct kernel_clone_args *args)
+{
+    u64 flags = args->flags;
+    bool namespace_only = flags == CLONE_NEWPID || flags == CLONE_NEWCGROUP ||
+        flags == CLONE_NEWIPC || flags == CLONE_NEWNET ||
+        flags == CLONE_NEWNS || flags == CLONE_NEWUTS;
+
+    if (namespace_only && !ns_capable(current_user_ns(), CAP_SYS_ADMIN))
+        return -EPERM;
+    if (!flags && !args->exit_signal && args->set_tid_size == 1 &&
+        args->set_tid && args->set_tid[0] == 1 &&
+        !checkpoint_restore_ns_capable(current->nsproxy->pid_ns_for_children->user_ns))
+        return -EPERM;
+    return -EOPNOTSUPP;
+}
+#endif
+
 pid_t kernel_clone(struct kernel_clone_args *args)
 {
 	u64 clone_flags = args->flags;
@@ -2801,8 +2821,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         bool libc_fork = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
                          !args->stack && !args->tls && !args->parent_tid;
-        /* These namespace/parent/FD flags do not change the child PID namespace. */
+        /* Kernel object/parent/user-namespace flags keep the child PID namespace. */
         bool cow_clone = (clone_flags == 0 || clone_flags == CLONE_FILES ||
+                          clone_flags == CLONE_FS || clone_flags == CLONE_IO || clone_flags == CLONE_SYSVSEM ||
                           clone_flags == CLONE_PARENT || clone_flags == CLONE_NEWUSER ||
                           clone_flags == CLONE_CHILD_SETTID) &&
                          !args->tls && !args->parent_tid &&
@@ -2824,7 +2845,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
                      !args->parent_tid && !args->child_tid;
         if ((!ordinary && !thread && !vfork && !shared_task) ||
             ((ordinary || vfork) && !thread_group_empty(current)))
-            return -EOPNOTSUPP;
+            return nacre_clone_reject(args);
     }
 #endif
 
