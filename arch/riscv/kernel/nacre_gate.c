@@ -16,12 +16,17 @@
 #include <asm/termbits.h>
 #include <linux/utsname.h>
 #include <linux/resource.h>
+#include <linux/timex.h>
 #include <linux/socket.h>
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
 #include <linux/fcntl.h>
 #include <linux/poll.h>
 #include <linux/loop.h>
+#include <linux/sem.h>
+#include <linux/msg.h>
+#include <linux/sysinfo.h>
+#include <linux/mqueue.h>
 #include <uapi/linux/sched/types.h>
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
@@ -85,6 +90,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_listen:
     case __NR_accept:
     case __NR_getsockname:
+    case __NR_getpeername:
+    case __NR_shutdown:
     case __NR_sendto:
     case __NR_recvfrom:
     case __NR_setsockopt:
@@ -116,6 +123,38 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_splice:
     case __NR_tee:
     case __NR_copy_file_range:
+    case __NR_ioprio_set:
+    case __NR_ioprio_get:
+    case __NR_personality:
+    case __NR_sethostname:
+    case __NR_setdomainname:
+    case __NR_getrlimit:
+    case __NR_gettimeofday:
+    case __NR_settimeofday:
+    case __NR_adjtimex:
+    case __NR_clock_adjtime:
+    case __NR_memfd_create:
+    case __NR_membarrier:
+    case __NR_sysinfo:
+    case __NR_mlock:
+    case __NR_munlock:
+    case __NR_mlockall:
+    case __NR_munlockall:
+    case __NR_mlock2:
+    case __NR_mq_open:
+    case __NR_mq_unlink:
+    case __NR_mq_timedsend:
+    case __NR_mq_timedreceive:
+    case __NR_mq_notify:
+    case __NR_mq_getsetattr:
+    case __NR_msgget:
+    case __NR_msgctl:
+    case __NR_msgrcv:
+    case __NR_msgsnd:
+    case __NR_semget:
+    case __NR_semctl:
+    case __NR_semtimedop:
+    case __NR_semop:
     case __NR_getitimer:
     case __NR_timer_create:
     case __NR_timer_gettime:
@@ -154,6 +193,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_readlinkat:
     case __NR_fstat:
     case __NR_execve:
+    case __NR_execveat:
+    case __NR_openat2:
     case __NR_rt_sigprocmask:
     case __NR_rt_sigpending:
     case __NR_clone:
@@ -259,6 +300,17 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(offsetof(struct loop_info64, lo_file_name) == 56);
         static_assert(sizeof(struct loop_config) == 304);
         static_assert(offsetof(struct loop_config, info) == 8);
+        static_assert(sizeof(struct sysinfo) == 112);
+        static_assert(sizeof(struct mq_attr) == 64);
+        static_assert(sizeof(struct sembuf) == 6);
+        static_assert(sizeof(struct semid64_ds) == 88);
+        static_assert(sizeof(struct msqid64_ds) == 120);
+        static_assert(sizeof(struct ipc64_perm) == 48);
+        static_assert(offsetof(struct ipc64_perm, uid) == 4);
+        static_assert(offsetof(struct ipc64_perm, mode) == 20);
+        static_assert(offsetof(struct msqid64_ds, msg_qbytes) == 88);
+        static_assert(sizeof(struct msginfo) == 32);
+        static_assert(sizeof(struct seminfo) == 40);
         static_assert(offsetof(struct pollfd, events) == 4);
         static_assert(offsetof(struct pollfd, revents) == 6);
         static_assert(sizeof(struct rlimit64) == 16);
@@ -313,7 +365,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     }
 	instrumentation_end();
     /* Handoff and buffer growth carry an AS request to M. */
-    bool handoff = kind == __NR_clone || kind == __NR_execve || kind == NACRE_GATE_BUFFER_GROW;
+    bool handoff = kind == __NR_clone || kind == __NR_execve || kind == __NR_execveat || kind == NACRE_GATE_BUFFER_GROW;
     handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9);
     /* AS renews the private-word authorization for a futex restart block. */
     handoff |= kind == __NR_restart_syscall && value;
@@ -377,3 +429,15 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     nacre_activate();
     instrumentation_end();
 }
+
+static_assert(sizeof(struct __kernel_timex) == 208);
+static_assert(offsetof(struct __kernel_timex, status) == 40);
+static_assert(offsetof(struct __kernel_timex, constant) == 48);
+static_assert(offsetof(struct __kernel_timex, time) == 72);
+static_assert(offsetof(struct __kernel_timex, tick) == 88);
+static_assert(offsetof(struct __kernel_timex, shift) == 112);
+static_assert(offsetof(struct __kernel_timex, tai) == 160);
+
+static_assert(sizeof(struct rlimit) == 16);
+static_assert(sizeof(struct __kernel_old_timeval) == 16);
+static_assert(sizeof(struct timezone) == 8);

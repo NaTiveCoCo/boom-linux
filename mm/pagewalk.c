@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/pagewalk.h>
+#ifdef NACC
+#include <asm/nacre_registration.h>
+#endif
 #include <linux/highmem.h>
 #include <linux/sched.h>
 #include <linux/hugetlb.h>
@@ -341,6 +344,14 @@ static int __walk_page_range(unsigned long start, unsigned long end,
 			return err;
 	}
 
+#ifdef NACC
+	/* AS owns these supervisor PTPs; they have no Linux ptdesc/ptlock lifecycle.
+	 * Report the reserved range as holes, retaining the caller's VMA callbacks. */
+	if (nacre_agent_vma(vma)) {
+		if (ops->pte_hole)
+			err = ops->pte_hole(start, end, -1, walk);
+	} else
+#endif
 	if (is_vm_hugetlb_page(vma)) {
 		if (ops->hugetlb_entry)
 			err = walk_hugetlb_range(start, end, walk);

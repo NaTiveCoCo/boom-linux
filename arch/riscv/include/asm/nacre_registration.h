@@ -63,6 +63,8 @@ void nacre_fork_child_return(void);
 void nacre_fork_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);
 int nacre_buffer_fork_prepare(struct mm_struct *mm, unsigned long *address, unsigned long *capacity);
 struct linux_binprm;
+bool nacre_agent_vma(const struct vm_area_struct *vma);
+unsigned long nacre_app_vm_pages(struct mm_struct *mm);
 int nacre_exec_reserve(struct mm_struct *mm);
 int nacre_exec_prepare(struct linux_binprm *bprm);
 void __noreturn nacre_exec_handoff(void);

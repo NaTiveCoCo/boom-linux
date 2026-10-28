@@ -7,6 +7,9 @@
  */
 
 #include <linux/capability.h>
+#ifdef NACC
+#include <asm/nacre_registration.h>
+#endif
 #include <linux/mman.h>
 #include <linux/mm.h>
 #include <linux/sched/user.h>
@@ -744,7 +747,7 @@ out:
 
 SYSCALL_DEFINE1(mlockall, int, flags)
 {
-	unsigned long lock_limit;
+	unsigned long lock_limit, total_vm;
 	int ret;
 
 	if (!flags || (flags & ~(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)) ||
@@ -761,7 +764,12 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 		return -EINTR;
 
 	ret = -ENOMEM;
-	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
+	total_vm = current->mm->total_vm;
+#ifdef NACC
+	if (flags & MCL_CURRENT)
+		total_vm = nacre_app_vm_pages(current->mm);
+#endif
+	if (!(flags & MCL_CURRENT) || (total_vm <= lock_limit) ||
 	    capable(CAP_IPC_LOCK))
 		ret = apply_mlockall_flags(flags);
 	mmap_write_unlock(current->mm);

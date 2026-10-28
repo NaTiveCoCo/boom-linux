@@ -19,6 +19,36 @@
 /* Distinguish our reservation from an unrelated inaccessible mapping. */
 static const struct vm_operations_struct nacre_reservation_ops;
 
+bool nacre_agent_vma(const struct vm_area_struct *vma)
+{
+	if (vma->vm_ops != &nacre_reservation_ops)
+		return false;
+	BUG_ON(vma->vm_start != NACC_AGENT_VA_BASE ||
+	       vma->vm_end != NACC_AGENT_VA_SLOT_END || vma->vm_flags != NACRE_VMA_FLAGS);
+	return true;
+}
+
+/* Only the native memlock admission budget excludes AS infrastructure. */
+unsigned long nacre_app_vm_pages(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	VMA_ITERATOR(vmi, mm, 0);
+	unsigned long infrastructure = 0;
+	bool found = false;
+
+	mmap_assert_locked(mm);
+	if (!nacre_mm_private(mm))
+		return mm->total_vm;
+	for_each_vma(vmi, vma) {
+		bool agent = nacre_agent_vma(vma);
+		if (agent || nacre_buffer_vma(vma))
+			infrastructure += vma_pages(vma);
+		found |= agent;
+	}
+	BUG_ON(!found || infrastructure > mm->total_vm);
+	return mm->total_vm - infrastructure;
+}
+
 SYSCALL_DEFINE1(nacre_register, unsigned long, cid)
 {
 	if (!cid || cid >> 48 || !current->mm ||
