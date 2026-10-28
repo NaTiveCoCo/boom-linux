@@ -389,6 +389,13 @@ static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
 		if (!pte_present(ptent))
 			continue;
 		folio = vm_normal_folio(vma, addr, ptent);
+#ifdef NACC
+		if (!folio) {
+			struct page *page = nacre_private_page_metadata(vma, addr, ptent);
+			if (page)
+				folio = page_folio(page);
+		}
+#endif
 		if (!folio || folio_is_zone_device(folio))
 			continue;
 

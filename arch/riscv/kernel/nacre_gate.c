@@ -23,11 +23,17 @@
 #include <linux/fcntl.h>
 #include <linux/poll.h>
 #include <linux/loop.h>
+#include <linux/nsfs.h>
+#include <uapi/linux/mount.h>
 #include <linux/sem.h>
 #include <linux/msg.h>
 #include <linux/sysinfo.h>
 #include <linux/mqueue.h>
 #include <uapi/linux/sched/types.h>
+
+_Static_assert(sizeof(kernel_siginfo_t) == 48 && offsetof(kernel_siginfo_t, si_code) == 8 &&
+               offsetof(kernel_siginfo_t, si_pid) == 16 && offsetof(kernel_siginfo_t, si_uid) == 20 &&
+               offsetof(kernel_siginfo_t, si_value) == 24, "Queued signal ABI drift");
 
 #define NACRE_GATE_BUFFER_GROW 0x1000
 #define NACRE_GATE_USER_ACCESS 0x1001
@@ -74,9 +80,13 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         BUG_ON(buffer < __NR_setxattr || buffer > __NR_fremovexattr);
         kind = buffer;
         fallthrough;
+    case __NR_sigaltstack:
     case __NR_getcwd:
     case __NR_futex:
     case __NR_set_tid_address:
+    case __NR_add_key:
+    case __NR_request_key:
+    case __NR_keyctl:
     case __NR_madvise:
     case __NR_dup:
     case __NR_dup3:
@@ -173,6 +183,12 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_getpgid:
     case __NR_getsid:
     case __NR_setsid:
+    case __NR_mincore:
+    case __NR_kcmp:
+    case __NR_pidfd_getfd:
+    case __NR_rt_sigqueueinfo:
+    case __NR_rt_tgsigqueueinfo:
+    case __NR_pidfd_send_signal:
     case __NR_pidfd_open:
     case __NR_close_range:
     case __NR_unshare:
@@ -258,6 +274,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_setfsuid:
     case __NR_setfsgid:
     case __NR_mount:
+    case __NR_mount_setattr:
     case __NR_umount2:
     case __NR_open_tree:
     case __NR_move_mount:
@@ -338,6 +355,13 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         regs->a3 = args[3];
         regs->a4 = args[4];
         regs->a5 = args[5];
+        if (kind == __NR_sigaltstack) {
+            static_assert(sizeof(stack_t) == 24);
+            static_assert(offsetof(stack_t, ss_flags) == 8);
+            static_assert(offsetof(stack_t, ss_size) == 16);
+            /* Native on_sig_stack uses the existing explicitly shared stack control. */
+            regs->sp = args[2];
+        }
         break;
     }
     case __NR_read:
@@ -366,7 +390,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 	instrumentation_end();
     /* Handoff and buffer growth carry an AS request to M. */
     bool handoff = kind == __NR_clone || kind == __NR_execve || kind == __NR_execveat || kind == NACRE_GATE_BUFFER_GROW;
-    handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9);
+    handoff |= kind == __NR_futex && ((regs->a1 & 127) == 0 || (regs->a1 & 127) == 9 || (regs->a1 & 127) == 4);
     /* AS renews the private-word authorization for a futex restart block. */
     handoff |= kind == __NR_restart_syscall && value;
     instrumentation_begin();
@@ -441,3 +465,10 @@ static_assert(offsetof(struct __kernel_timex, tai) == 160);
 static_assert(sizeof(struct rlimit) == 16);
 static_assert(sizeof(struct __kernel_old_timeval) == 16);
 static_assert(sizeof(struct timezone) == 8);
+
+static_assert(NS_GET_OWNER_UID == 0xb704);
+static_assert(NS_GET_MNTNS_ID == 0x8008b705);
+static_assert(NS_GET_PID_FROM_PIDNS == 0x8004b706);
+static_assert(NS_GET_TGID_IN_PIDNS == 0x8004b709);
+
+static_assert(sizeof(struct mount_attr) == 32);

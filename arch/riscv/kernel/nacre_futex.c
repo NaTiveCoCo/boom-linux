@@ -5,7 +5,7 @@
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
 
-/* Only the locked native WAIT check crosses M; the queue key remains unchanged. */
+/* Only locked native word comparisons cross M; the queue keys remain unchanged. */
 int nacre_futex_compare(u32 __user *address, u32 expected)
 {
     struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_FUTEX_COMPARE,

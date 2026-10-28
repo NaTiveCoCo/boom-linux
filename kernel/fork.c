@@ -2801,17 +2801,28 @@ pid_t kernel_clone(struct kernel_clone_args *args)
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         bool libc_fork = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
                          !args->stack && !args->tls && !args->parent_tid;
-        /* CLONE_FILES shares Linux's FD table, while each task still owns a COW root. */
-        bool cow_clone = (clone_flags == 0 || clone_flags == CLONE_FILES) &&
-                         !args->tls && !args->parent_tid && !args->child_tid;
+        /* These namespace/parent/FD flags do not change the child PID namespace. */
+        bool cow_clone = (clone_flags == 0 || clone_flags == CLONE_FILES ||
+                          clone_flags == CLONE_PARENT || clone_flags == CLONE_NEWUSER ||
+                          clone_flags == CLONE_CHILD_SETTID) &&
+                         !args->tls && !args->parent_tid &&
+                         (clone_flags == CLONE_CHILD_SETTID ? !!args->child_tid : !args->child_tid);
         bool ordinary = (libc_fork || cow_clone) && args->exit_signal == SIGCHLD;
         bool raw = clone_flags == NACRE_THREAD_FLAGS && !args->parent_tid && !args->child_tid;
         bool pthread = clone_flags == NACRE_PTHREAD_FLAGS && args->parent_tid && args->child_tid;
         bool thread = (raw || pthread) && !args->exit_signal && args->stack && args->tls;
+        bool shared_task = (clone_flags == CLONE_VM ||
+                            clone_flags == (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND) ||
+                            clone_flags == (CLONE_VM | CLONE_NEWNET) ||
+                            clone_flags == (CLONE_VM | CLONE_PARENT_SETTID) ||
+                            clone_flags == (CLONE_VM | CLONE_SIGHAND | CLONE_THREAD | CLONE_CHILD_CLEARTID)) &&
+                           args->exit_signal == SIGCHLD && args->stack && !args->tls &&
+                           ((clone_flags & CLONE_PARENT_SETTID) ? !!args->parent_tid : !args->parent_tid) &&
+                           ((clone_flags & CLONE_CHILD_CLEARTID) ? !!args->child_tid : !args->child_tid);
         bool vfork = clone_flags == (CLONE_VM | CLONE_VFORK) &&
                      args->exit_signal == SIGCHLD && args->stack && !args->tls &&
                      !args->parent_tid && !args->child_tid;
-        if ((!ordinary && !thread && !vfork) ||
+        if ((!ordinary && !thread && !vfork && !shared_task) ||
             ((ordinary || vfork) && !thread_group_empty(current)))
             return -EOPNOTSUPP;
     }

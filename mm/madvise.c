@@ -30,6 +30,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/shmem_fs.h>
+#include <linux/nacre_shmem.h>
 #include <linux/mmu_notifier.h>
 
 #include <asm/tlb.h>
@@ -267,6 +268,9 @@ static long madvise_willneed(struct vm_area_struct *vma,
 	loff_t offset;
 
 	*prev = vma;
+	/* Check the actual VMA file before shmem swapin or filesystem prefetch. */
+	if (file && shmem_file(file) && nacre_shmem_io(file_inode(file)))
+		return -EPERM;
 #ifdef CONFIG_SWAP
 	if (!file) {
 		walk_page_range(vma->vm_mm, start, end, &swapin_walk_ops, vma);

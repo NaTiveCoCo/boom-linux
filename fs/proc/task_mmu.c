@@ -801,6 +801,10 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 
 	if (pte_present(ptent)) {
 		page = vm_normal_page(vma, addr, ptent);
+#ifdef NACC
+		if (!page)
+			page = nacre_private_page_metadata(vma, addr, ptent);
+#endif
 		young = pte_young(ptent);
 		dirty = pte_dirty(ptent);
 		present = true;

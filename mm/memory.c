@@ -1792,6 +1792,15 @@ static struct page *nacc_private_leaf_page(struct mm_struct *mm,
 	return pfn_to_page(pfn);
 }
 
+#ifdef NACC
+/* Reuse the same leaf identity checks as private COW and retirement. */
+struct page *nacre_private_page_metadata(struct vm_area_struct *vma,
+				       unsigned long addr, pte_t pte)
+{
+	return nacc_private_leaf_page(vma->vm_mm, vma, addr, pte, NULL);
+}
+#endif
+
 /*
  * Zap or skip at least one present PTE, trying to batch-process subsequent
  * PTEs that map consecutive pages of the same folio.

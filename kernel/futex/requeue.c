@@ -4,6 +4,9 @@
 #include <linux/sched/signal.h>
 
 #include "futex.h"
+#ifdef NACC
+#include <asm/nacre_registration.h>
+#endif
 #include "../locking/rtmutex_common.h"
 
 /*
@@ -451,26 +454,37 @@ retry_private:
 	double_lock_hb(hb1, hb2);
 
 	if (likely(cmpval != NULL)) {
-		u32 curval;
-
-		ret = futex_get_value_locked(&curval, uaddr1);
-
-		if (unlikely(ret)) {
-			double_unlock_hb(hb1, hb2);
-			futex_hb_waiters_dec(hb2);
-
-			ret = get_user(curval, uaddr1);
+#ifdef NACC
+		if (current->thread.nacre_flag == NACRE_HANDOFF) {
+			/* Reuse the authorized single-word comparison under both native locks. */
+			BUG_ON(requeue_pi);
+			ret = nacre_futex_compare(uaddr1, *cmpval);
 			if (ret)
-				return ret;
+				goto out_unlock;
+		} else
+#endif
+		{
+			u32 curval;
 
-			if (!(flags1 & FLAGS_SHARED))
-				goto retry_private;
+			ret = futex_get_value_locked(&curval, uaddr1);
 
-			goto retry;
-		}
-		if (curval != *cmpval) {
-			ret = -EAGAIN;
-			goto out_unlock;
+			if (unlikely(ret)) {
+				double_unlock_hb(hb1, hb2);
+				futex_hb_waiters_dec(hb2);
+
+				ret = get_user(curval, uaddr1);
+				if (ret)
+					return ret;
+
+				if (!(flags1 & FLAGS_SHARED))
+					goto retry_private;
+
+				goto retry;
+			}
+			if (curval != *cmpval) {
+				ret = -EAGAIN;
+				goto out_unlock;
+			}
 		}
 	}
 

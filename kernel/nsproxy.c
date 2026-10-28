@@ -24,6 +24,10 @@
 #include <linux/proc_ns.h>
 #include <linux/file.h>
 #include <linux/syscalls.h>
+#ifdef NACC
+#include <linux/mm.h>
+#include <asm/nacre_ptp.h>
+#endif
 #include <linux/cgroup.h>
 #include <linux/perf_event.h>
 
@@ -565,6 +569,14 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 	}
 	if (err)
 		goto out;
+
+#ifdef NACC
+	/* Only reviewed nsfs views are admitted; resolve type=0 before the PID guard. */
+	if (nacre_mm_private(current->mm) && (!ns || (flags & CLONE_NEWPID))) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+#endif
 
 	err = prepare_nsset(flags, &nsset);
 	if (err)

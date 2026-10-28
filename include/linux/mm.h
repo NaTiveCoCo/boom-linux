@@ -2371,6 +2371,11 @@ struct folio *vm_normal_folio(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte);
 struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte);
+#ifdef NACC
+/* Private-leaf metadata only: do not admit these pages to generic GUP/content paths. */
+struct page *nacre_private_page_metadata(struct vm_area_struct *vma,
+				       unsigned long addr, pte_t pte);
+#endif
 struct folio *vm_normal_folio_pmd(struct vm_area_struct *vma,
 				  unsigned long addr, pmd_t pmd);
 struct page *vm_normal_page_pmd(struct vm_area_struct *vma, unsigned long addr,
