@@ -306,6 +306,9 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_connect:
     case __NR_accept4:
     case __NR_prlimit64:
+    case __NR_io_destroy:
+    case __NR_io_cancel:
+    case __NR_io_getevents:
     case __NR_ptrace:
     case __NR_perf_event_open:
     case __NR_times:
