@@ -90,6 +90,10 @@
 
 #include <linux/uaccess.h>
 #include "util.h"
+#ifdef NACC
+#include <asm/nacre_ptp.h>
+#include <asm/ptrace.h>
+#endif
 
 /* One semaphore structure for each semaphore in the system. */
 struct sem {
@@ -1429,6 +1433,21 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 	if (err)
 		goto out_rcu_wakeup;
 
+#ifdef NACC
+	if ((cmd == GETALL || cmd == SETALL) && current->mm &&
+	    nacre_mm_private(current->mm)) {
+		unsigned long count = task_pt_regs(current)->a4;
+
+		/* Private gate only: zero queries the held object's native width
+		 * after ID/permission checks. The actual call must match before
+		 * any copy. No reference or lock survives either syscall.
+		 */
+		if (!count || count != (unsigned long)nsems) {
+			err = count ? -EAGAIN : nsems;
+			goto out_rcu_wakeup;
+		}
+	}
+#endif
 	switch (cmd) {
 	case GETALL:
 	{

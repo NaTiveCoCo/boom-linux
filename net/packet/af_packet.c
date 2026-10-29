@@ -80,6 +80,10 @@
 #include <linux/seq_file.h>
 #include <linux/poll.h>
 #include <linux/module.h>
+#ifdef NACC
+#include <asm/nacre_ptp.h>
+#include <asm/ptrace.h>
+#endif
 #include <linux/init.h>
 #include <linux/mutex.h>
 #include <linux/if_vlan.h>
@@ -3883,6 +3887,26 @@ packet_setsockopt(struct socket *sock, int level, int optname, sockptr_t optval,
 
 		ret = -EINVAL;
 		lock_sock(sk);
+#ifdef NACC
+		if (optname == PACKET_RX_RING && current->mm &&
+		    nacre_mm_private(current->mm)) {
+			unsigned long width = po->tp_version == TPACKET_V1 ||
+				po->tp_version == TPACKET_V2 ? sizeof(req_u.req) : sizeof(req_u.req3);
+			unsigned long expected = task_pt_regs(current)->a5;
+
+			/* AS queried stock PACKET_VERSION on the actual FD. Recheck its
+			 * width under the same lock as the native copy/update; no socket
+			 * reference survives the AS round trip.
+			 */
+			BUG_ON(expected != sizeof(req_u.req) && expected != sizeof(req_u.req3));
+			if (optlen < width)
+				goto out_ring;
+			if (expected != width) {
+				ret = -EAGAIN;
+				goto out_ring;
+			}
+		}
+#endif
 		switch (po->tp_version) {
 		case TPACKET_V1:
 		case TPACKET_V2:
@@ -3904,6 +3928,9 @@ packet_setsockopt(struct socket *sock, int level, int optname, sockptr_t optval,
 		if (!ret)
 			ret = packet_set_ring(sk, &req_u, 0,
 					      optname == PACKET_TX_RING);
+#ifdef NACC
+out_ring:
+#endif
 		release_sock(sk);
 		return ret;
 	}
