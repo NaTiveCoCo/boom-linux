@@ -17,6 +17,7 @@
 #include <linux/utsname.h>
 #include <linux/resource.h>
 #include <linux/timex.h>
+#include <linux/times.h>
 #include <linux/socket.h>
 #include <linux/uio.h>
 #include <linux/eventpoll.h>
@@ -304,6 +305,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_connect:
     case __NR_accept4:
     case __NR_prlimit64:
+    case __NR_times:
     case __NR_getrusage:
     case __NR_sched_yield:
     case __NR_getpid:
@@ -350,6 +352,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(offsetof(struct pollfd, revents) == 6);
         static_assert(sizeof(struct rlimit64) == 16);
         static_assert(sizeof(struct rusage) == 144);
+        static_assert(sizeof(struct tms) == 32);
         static_assert(sizeof(struct sigevent) == 64);
         static_assert(offsetof(struct sigevent, sigev_notify) == 12);
         static_assert(offsetof(struct sigevent, sigev_notify_thread_id) == 16);
