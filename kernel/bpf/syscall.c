@@ -39,6 +39,9 @@
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
 #include <net/tcx.h>
+#if defined(CONFIG_RISCV) && defined(NACC)
+#include <asm/nacre_ptp.h>
+#endif
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -1514,6 +1517,36 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 	return NULL;
 }
 
+/* Query and recheck native map widths using the existing object reference.
+ * No map reference or private user page survives the syscall service stage. */
+static int nacre_bpf_map_width(struct bpf_map *map, union bpf_attr *attr)
+{
+#if defined(CONFIG_RISCV) && defined(NACC)
+	unsigned long expected;
+	u32 info[3];
+
+	BUILD_BUG_ON(sizeof(union bpf_attr) != 152);
+	BUILD_BUG_ON(offsetof(union bpf_attr, log_true_size) != 140);
+	if (!current->mm || !nacre_mm_private(current->mm) ||
+		task_pt_regs(current)->a7 != __NR_bpf)
+		return 1;
+	if (map->map_type != BPF_MAP_TYPE_HASH && map->map_type != BPF_MAP_TYPE_ARRAY)
+		return -EOPNOTSUPP;
+	expected = task_pt_regs(current)->a3;
+	if (expected) {
+		if (expected != ((u64)map->key_size << 32 | map->value_size))
+			return -EAGAIN;
+		return 1;
+	}
+	info[0] = map->map_type;
+	info[1] = map->key_size;
+	info[2] = map->value_size;
+	return copy_to_user(u64_to_user_ptr(attr->value), info, sizeof(info)) ? -EFAULT : 0;
+#else
+	return 1;
+#endif
+}
+
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
 
@@ -1542,6 +1575,10 @@ static int map_lookup_elem(union bpf_attr *attr)
 	if ((attr->flags & BPF_F_LOCK) &&
 	    !btf_record_has_field(map->record, BPF_SPIN_LOCK))
 		return -EINVAL;
+
+	err = nacre_bpf_map_width(map, attr);
+	if (err <= 0)
+		return err;
 
 	key = __bpf_copy_key(ukey, map->key_size);
 	if (IS_ERR(key))
@@ -1608,6 +1645,12 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 	    !btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
 		err = -EINVAL;
 		goto err_put;
+	}
+
+	if (!uattr.is_kernel) {
+		err = nacre_bpf_map_width(map, attr);
+		if (err <= 0)
+			goto err_put;
 	}
 
 	key = ___bpf_copy_key(ukey, map->key_size);

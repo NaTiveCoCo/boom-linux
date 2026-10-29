@@ -145,6 +145,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_sched_rr_get_interval:
     case __NR_sched_getattr:
     case __NR_tkill:
+    case __NR_bpf:
     case __NR_vmsplice:
     case __NR_splice:
     case __NR_tee:
