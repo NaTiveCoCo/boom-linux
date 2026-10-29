@@ -35,6 +35,9 @@
 #include <linux/syscall_user_dispatch.h>
 
 #include <asm/syscall.h>	/* for syscall_get_* */
+#ifdef NACC
+#include <asm/nacre_ptp.h>
+#endif
 
 /*
  * Access another process' address space via ptrace.
@@ -458,6 +461,12 @@ static int ptrace_attach(struct task_struct *task, long request,
 				return -EPERM;
 			if (task->ptrace)
 				return -EPERM;
+
+#ifdef NACC
+			/* Preserve native lookup/permission errors; never establish tracing. */
+			if (current->mm && nacre_mm_private(current->mm))
+				return -EOPNOTSUPP;
+#endif
 
 			task->ptrace = flags;
 			ptrace_link(task, current);
