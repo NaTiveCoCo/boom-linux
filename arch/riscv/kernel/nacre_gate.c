@@ -117,6 +117,8 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_recvfrom:
     case __NR_setsockopt:
     case __NR_getsockopt:
+    case __NR_sendmmsg:
+    case __NR_recvmmsg:
     case __NR_sendmsg:
     case __NR_recvmsg:
     case __NR_socketpair:
