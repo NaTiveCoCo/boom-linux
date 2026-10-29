@@ -2817,6 +2817,30 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return retval;
 }
 
+/* Classify only no-direction high-type requests outside the pinned PTY/N_TTY
+ * command tables. No private operand or untyped ioctl is executed. */
+long nacre_tty_ioctl_error(struct file *file, unsigned int cmd)
+{
+    struct tty_struct *tty;
+    struct tty_ldisc *ld;
+    long error;
+
+    if (_IOC_DIR(cmd) != _IOC_NONE || !_IOC_SIZE(cmd) || _IOC_TYPE(cmd) < 0x80 ||
+        file->f_op->unlocked_ioctl != tty_ioctl)
+        return -ENOSYS;
+    tty = file_tty(file);
+    BUG_ON(!tty);
+    if (tty->driver->type != TTY_DRIVER_TYPE_PTY)
+        return -ENOSYS;
+    ld = tty_ldisc_ref_wait(tty);
+    if (!ld)
+        return -EIO;
+    error = ld->ops->num == N_TTY ? -ENOTTY : -ENOSYS;
+    tty_ldisc_deref(ld);
+    return error;
+}
+
+
 #ifdef CONFIG_COMPAT
 
 struct serial_struct32 {

@@ -342,6 +342,7 @@ dev_t tty_devnum(struct tty_struct *tty);
 void proc_clear_tty(struct task_struct *p);
 struct tty_struct *get_current_tty(void);
 /* tty_io.c */
+long nacre_tty_ioctl_error(struct file *file, unsigned int cmd);
 int __init tty_init(void);
 const char *tty_name(const struct tty_struct *tty);
 struct tty_struct *tty_kopen_exclusive(dev_t device);
@@ -364,6 +365,8 @@ static inline void proc_clear_tty(struct task_struct *p)
 static inline struct tty_struct *get_current_tty(void)
 { return NULL; }
 /* tty_io.c */
+static inline long nacre_tty_ioctl_error(struct file *file, unsigned int cmd)
+{ return -ENOSYS; }
 static inline int __init tty_init(void)
 { return 0; }
 static inline const char *tty_name(const struct tty_struct *tty)
