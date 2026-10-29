@@ -41,6 +41,7 @@
 #include <linux/sched/signal.h>
 #if defined(CONFIG_RISCV) && defined(NACC)
 #include <asm/nacc.h>
+#include <asm/nacre_ptp.h>
 #endif
 
 #include "internal.h"
@@ -1584,6 +1585,11 @@ static ssize_t vmsplice_to_user(struct file *file, struct iov_iter *iter,
 
 	if (!pipe)
 		return -EBADF;
+#if defined(CONFIG_RISCV) && defined(NACC)
+	/* Validate the actual file before any private data access or retained page. */
+	if (current->mm && nacre_mm_private(current->mm))
+		return -EOPNOTSUPP;
+#endif
 
 	pipe_clear_nowait(file);
 
@@ -1617,6 +1623,11 @@ static ssize_t vmsplice_to_pipe(struct file *file, struct iov_iter *iter,
 	pipe = get_pipe_info(file, true);
 	if (!pipe)
 		return -EBADF;
+#if defined(CONFIG_RISCV) && defined(NACC)
+	/* Validate the actual file before any private data access or retained page. */
+	if (current->mm && nacre_mm_private(current->mm))
+		return -EOPNOTSUPP;
+#endif
 
 	pipe_clear_nowait(file);
 
