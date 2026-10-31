@@ -9,7 +9,7 @@
 #include <linux/ptrace.h>
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/vdso.h>
 
 /* Reserve scalar I/O's original page offset in addition to a one-MiB payload.

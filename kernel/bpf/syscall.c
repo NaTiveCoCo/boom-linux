@@ -39,7 +39,7 @@
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
 #include <net/tcx.h>
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 #include <asm/nacre_ptp.h>
 #endif
 
@@ -1521,7 +1521,7 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
  * No map reference or private user page survives the syscall service stage. */
 static int nacre_bpf_map_width(struct bpf_map *map, union bpf_attr *attr)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 	unsigned long expected;
 	u32 info[3];
 

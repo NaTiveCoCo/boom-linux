@@ -4,7 +4,6 @@
 #define _ASM_RISCV_ENTRY_COMMON_H
 
 #include <asm/stacktrace.h>
-#include <asm/nacc.h>
 #include <asm/nacre_registration.h>
 #include <asm/thread_info.h>
 #include <asm/vector.h>
@@ -27,16 +26,6 @@ static inline void arch_exit_to_user_mode_prepare(struct pt_regs *regs,
 }
 
 #define arch_exit_to_user_mode_prepare arch_exit_to_user_mode_prepare
-
-static inline void arch_exit_to_user_mode_work(struct pt_regs *regs,
-					       unsigned long ti_work)
-{
-	if ((ti_work & _TIF_NOTIFY_RESUME) &&
-	    current->thread.nacc_flag == NACC_FORKED)
-		nacc_attach_forked_child_if_needed();
-}
-
-#define arch_exit_to_user_mode_work arch_exit_to_user_mode_work
 
 void handle_page_fault(struct pt_regs *regs);
 void handle_break(struct pt_regs *regs);

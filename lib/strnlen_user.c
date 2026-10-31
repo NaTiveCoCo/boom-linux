@@ -8,27 +8,27 @@
 
 #include <asm/word-at-a-time.h>
 
-#ifdef NACC
-static __always_inline long nacc_strnlen_user_staged_result(
-	const struct nacc_uaccess_string_read_desc *desc,
+#ifdef NACRE
+static __always_inline long nacre_strnlen_user_staged_result(
+	const struct nacre_uaccess_string_read_desc *desc,
 	unsigned long count, unsigned long max)
 {
-	if (desc->nul_index != NACC_UACCESS_STRING_READ_NO_NUL)
+	if (desc->nul_index != NACRE_UACCESS_STRING_READ_NO_NUL)
 		return desc->nul_index + 1;
 	if (max >= count)
 		return count + 1;
 	return 0;
 }
 
-static __always_inline void nacc_strnlen_user_init_desc(
-	struct nacc_uaccess_string_read_desc *desc, unsigned long count,
+static __always_inline void nacre_strnlen_user_init_desc(
+	struct nacre_uaccess_string_read_desc *desc, unsigned long count,
 	unsigned long caller_pc)
 {
-	*desc = (struct nacc_uaccess_string_read_desc) {
-		.version = NACC_UACCESS_STRING_READ_DESC_VERSION,
-		.op = NACC_UACCESS_STRING_READ_OP_MEASURE_CSTR,
+	*desc = (struct nacre_uaccess_string_read_desc) {
+		.version = NACRE_UACCESS_STRING_READ_DESC_VERSION,
+		.op = NACRE_UACCESS_STRING_READ_OP_MEASURE_CSTR,
 		.count = count,
-		.nul_index = NACC_UACCESS_STRING_READ_NO_NUL,
+		.nul_index = NACRE_UACCESS_STRING_READ_NO_NUL,
 		.caller_pc = caller_pc,
 	};
 }
@@ -125,28 +125,28 @@ long strnlen_user(const char __user *str, long count)
 
 	if (can_do_masked_user_access()) {
 		long retval;
-#ifdef NACC
-		struct nacc_uaccess_string_read_desc nacc_desc;
-		int nacc_ret;
+#ifdef NACRE
+		struct nacre_uaccess_string_read_desc nacre_desc;
+		int nacre_ret;
 #endif
 
 		str = masked_user_access_begin(str);
-#ifdef NACC
-		nacc_strnlen_user_init_desc(&nacc_desc, count, _RET_IP_);
-		nacc_ret = nacc_uaccess_string_read_begin((unsigned long)str,
-							  count, &nacc_desc);
-		if (nacc_ret > 0) {
-			retval = nacc_strnlen_user_staged_result(&nacc_desc,
+#ifdef NACRE
+		nacre_strnlen_user_init_desc(&nacre_desc, count, _RET_IP_);
+		nacre_ret = nacre_uaccess_string_read_begin((unsigned long)str,
+							  count, &nacre_desc);
+		if (nacre_ret > 0) {
+			retval = nacre_strnlen_user_staged_result(&nacre_desc,
 								 count, count);
-			if (!nacc_uaccess_scope_end(
-				    NACC_UACCESS_SCOPE_STRING_READ,
-				    NACC_UACCESS_SCOPE_DIR_FROM_USER,
+			if (!nacre_uaccess_scope_end(
+				    NACRE_UACCESS_SCOPE_STRING_READ,
+				    NACRE_UACCESS_SCOPE_DIR_FROM_USER,
 				    (unsigned long)str, count, retval))
 				retval = 0;
 			user_read_access_end();
 			return retval;
 		}
-		if (nacc_ret < 0) {
+		if (nacre_ret < 0) {
 			user_read_access_end();
 			return 0;
 		}
@@ -161,9 +161,9 @@ long strnlen_user(const char __user *str, long count)
 	if (likely(src_addr < max_addr)) {
 		unsigned long max = max_addr - src_addr;
 		long retval;
-#ifdef NACC
-		struct nacc_uaccess_string_read_desc nacc_desc;
-		int nacc_ret;
+#ifdef NACRE
+		struct nacre_uaccess_string_read_desc nacre_desc;
+		int nacre_ret;
 #endif
 
 		/*
@@ -174,23 +174,23 @@ long strnlen_user(const char __user *str, long count)
 			max = count;
 
 		if (user_read_access_begin(str, max)) {
-#ifdef NACC
-			nacc_strnlen_user_init_desc(&nacc_desc, count, _RET_IP_);
-			nacc_ret = nacc_uaccess_string_read_begin(
-				(unsigned long)str, max, &nacc_desc);
-			if (nacc_ret > 0) {
-				retval = nacc_strnlen_user_staged_result(
-					&nacc_desc, count, max);
-				if (!nacc_uaccess_scope_end(
-					    NACC_UACCESS_SCOPE_STRING_READ,
-					    NACC_UACCESS_SCOPE_DIR_FROM_USER,
+#ifdef NACRE
+			nacre_strnlen_user_init_desc(&nacre_desc, count, _RET_IP_);
+			nacre_ret = nacre_uaccess_string_read_begin(
+				(unsigned long)str, max, &nacre_desc);
+			if (nacre_ret > 0) {
+				retval = nacre_strnlen_user_staged_result(
+					&nacre_desc, count, max);
+				if (!nacre_uaccess_scope_end(
+					    NACRE_UACCESS_SCOPE_STRING_READ,
+					    NACRE_UACCESS_SCOPE_DIR_FROM_USER,
 					    (unsigned long)str, max,
 					    retval))
 					retval = 0;
 				user_read_access_end();
 				return retval;
 			}
-			if (nacc_ret < 0) {
+			if (nacre_ret < 0) {
 				user_read_access_end();
 				return 0;
 			}

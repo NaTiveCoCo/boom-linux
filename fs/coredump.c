@@ -48,8 +48,8 @@
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
 #include <asm/exec.h>
-#if defined(CONFIG_RISCV) && defined(NACC)
-#include <asm/nacc.h>
+#if defined(CONFIG_RISCV) && defined(NACRE)
+#include <asm/nacre.h>
 #endif
 
 #include <trace/events/task.h>
@@ -904,8 +904,8 @@ static struct page *dump_page_alloc(void)
 {
 #ifdef copy_mc_to_kernel
 	return alloc_page(GFP_KERNEL);
-#elif defined(CONFIG_RISCV) && defined(NACC)
-	if (nacc_private_data_uaccess_active())
+#elif defined(CONFIG_RISCV) && defined(NACRE)
+	if (nacre_private_data_uaccess_active())
 		return alloc_page(GFP_KERNEL);
 #endif
 	/* We just want to return non-NULL; it's never used. */
@@ -918,19 +918,19 @@ static void dump_page_free(struct page *page)
 		__free_page(page);
 }
 
-#if defined(CONFIG_RISCV) && defined(NACC)
-static struct page *nacc_dump_page_copy(unsigned long addr, struct page *dst)
+#if defined(CONFIG_RISCV) && defined(NACRE)
+static struct page *nacre_dump_page_copy(unsigned long addr, struct page *dst)
 {
 	void *buf;
 	unsigned long left;
 
-	if (!nacc_private_data_uaccess_active())
+	if (!nacre_private_data_uaccess_active())
 		return NULL;
 	if (IS_ERR(dst))
 		return NULL;
 
 	/*
-	 * Avoid feeding a NaCC PRIVATE_DATA page directly to the filesystem
+	 * Avoid feeding a NACRE PRIVATE_DATA page directly to the filesystem
 	 * write path; copy through the monitored uaccess path first.
 	 */
 	buf = kmap_local_page(dst);
@@ -944,9 +944,9 @@ static struct page *nacc_dump_page_copy(unsigned long addr, struct page *dst)
 static inline struct page *dump_page_copy(struct page *src, struct page *dst,
 					  unsigned long addr)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
-	if (nacc_private_data_uaccess_active())
-		return nacc_dump_page_copy(addr, dst);
+#if defined(CONFIG_RISCV) && defined(NACRE)
+	if (nacre_private_data_uaccess_active())
+		return nacre_dump_page_copy(addr, dst);
 #endif
 #ifdef copy_mc_to_kernel
 	{

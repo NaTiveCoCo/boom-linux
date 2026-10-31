@@ -1131,7 +1131,6 @@ void vms_complete_munmap_vmas(struct vma_munmap_struct *vms,
 {
 	struct vm_area_struct *vma;
 	struct mm_struct *mm;
-	unsigned long nacc_pages = 0;
 
 	mm = current->mm;
 	mm->map_count -= vms->vma_count;
@@ -1144,18 +1143,10 @@ void vms_complete_munmap_vmas(struct vma_munmap_struct *vms,
 
 	vms_clear_ptes(vms, mas_detach, !vms->unlock);
 
-	mas_set(mas_detach, 0);
-	mas_for_each(mas_detach, vma, ULONG_MAX) {
-		if (vma->vm_flags & VM_NACC)
-			nacc_pages += vma_pages(vma);
-	}
-
 	/* Update high watermark before we lower total_vm */
 	update_hiwater_vm(mm);
 	/* Stat accounting */
-	VM_WARN_ON(nacc_pages > vms->nr_pages);
-	WRITE_ONCE(mm->total_vm,
-		   READ_ONCE(mm->total_vm) - (vms->nr_pages - nacc_pages));
+	WRITE_ONCE(mm->total_vm, READ_ONCE(mm->total_vm) - vms->nr_pages);
 	/* Paranoid bookkeeping */
 	VM_WARN_ON(vms->exec_vm > mm->exec_vm);
 	VM_WARN_ON(vms->stack_vm > mm->stack_vm);
@@ -1251,8 +1242,6 @@ int vms_gather_munmap_vmas(struct vma_munmap_struct *vms,
 		nrpages = vma_pages(next);
 
 		vms->nr_pages += nrpages;
-		if (next->vm_flags & VM_NACC)
-			goto accounted_done;
 		if (next->vm_flags & VM_LOCKED)
 			vms->locked_vm += nrpages;
 
@@ -1266,7 +1255,6 @@ int vms_gather_munmap_vmas(struct vma_munmap_struct *vms,
 		else if (is_data_mapping(next->vm_flags))
 			vms->data_vm += nrpages;
 
-accounted_done:
 		if (unlikely(vms->uf)) {
 			/*
 			 * If userfaultfd_unmap_prep returns an error the vmas

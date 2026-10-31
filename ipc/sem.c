@@ -90,7 +90,7 @@
 
 #include <linux/uaccess.h>
 #include "util.h"
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_ptp.h>
 #include <asm/ptrace.h>
 #endif
@@ -1433,7 +1433,7 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 	if (err)
 		goto out_rcu_wakeup;
 
-#ifdef NACC
+#ifdef NACRE
 	if ((cmd == GETALL || cmd == SETALL) && current->mm &&
 	    nacre_mm_private(current->mm)) {
 		unsigned long count = task_pt_regs(current)->a4;

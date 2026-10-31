@@ -102,11 +102,7 @@ struct thread_struct {
 	unsigned long s[12];	/* s[0]: frame pointer */
 	struct __riscv_d_ext_state fstate;
 
-    /* Nacc process flag, nacc process will be handled differently */
-    unsigned long nacc_flag;
-    unsigned long nacc_cid;
-
-	/* Exec registration is independent of the legacy NACC lifecycle. */
+	/* NACRE task registration and runtime state. */
 	unsigned long nacre_flag;
 	unsigned long nacre_cid;
 	unsigned long nacre_entry;

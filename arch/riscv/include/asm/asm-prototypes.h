@@ -59,7 +59,4 @@ asmlinkage void nacre_gate_dispatch(unsigned long cid, unsigned long pid,
 				  struct pt_regs *regs, unsigned long kind,
 				  unsigned long value, unsigned long buffer,
 				  unsigned long count);
-asmlinkage void nacc_delegate_entry(struct pt_regs *regs, unsigned long kind,
-				    unsigned long cause);
-
 #endif /* _ASM_RISCV_PROTOTYPES_H */

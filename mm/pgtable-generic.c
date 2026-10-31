@@ -16,8 +16,8 @@
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
 
-#ifdef NACC
-#include <asm/nacc.h>
+#ifdef NACRE
+#include <asm/nacre.h>
 #endif
 /*
  * If a p?d_bad entry is found while walking page tables, report

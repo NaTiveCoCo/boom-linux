@@ -114,8 +114,8 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 
-#ifdef NACC
-#include <asm/nacc.h>
+#ifdef NACRE
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_ptp.h>
 #include <asm/sbi.h>
@@ -671,18 +671,13 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		struct file *file;
 
 		vma_start_write(mpnt);
-		if (mpnt->vm_flags & (VM_DONTCOPY | VM_NACC)) {
+		if (mpnt->vm_flags & VM_DONTCOPY) {
 			retval = vma_iter_clear_gfp(&vmi, mpnt->vm_start,
 						    mpnt->vm_end, GFP_KERNEL);
 			if (retval)
 				goto loop_out;
 
-			if (mpnt->vm_flags & VM_NACC)
-				nacc_debug("[Linux]: dup_mmap: dropping inherited VM_NACC VMA [%lx, %lx) from child mm\n",
-					   mpnt->vm_start, mpnt->vm_end);
-			else
-				vm_stat_account(mm, mpnt->vm_flags,
-						-vma_pages(mpnt));
+			vm_stat_account(mm, mpnt->vm_flags, -vma_pages(mpnt));
 			continue;
 		}
 		charge = 0;
@@ -1650,7 +1645,7 @@ static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 			 */
             /* AS already cleared its private word before leaving the task.
              * Keep the native address/key and wake ordering for join. */
-#ifdef NACC
+#ifdef NACRE
             if (!nacre_mm_private(mm))
 #endif
 			    put_user(0, tsk->clear_child_tid);
@@ -1756,12 +1751,6 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	oldmm = current->mm;
 	if (!oldmm)
 		return 0;
-
-#ifdef NACC
-	if (nacc_mm_is_active(oldmm) && !(clone_flags & CLONE_VM) &&
-	    nacc_fork_window_check_sbi())
-		return -EOPNOTSUPP;
-#endif
 
 	if (clone_flags & CLONE_VM) {
 		mmget(oldmm);
@@ -2788,7 +2777,7 @@ struct task_struct *create_io_thread(int (*fn)(void *), void *arg, int node)
  *
  * args->exit_signal is expected to be checked for sanity by the caller.
  */
-#ifdef NACC
+#ifdef NACRE
 /* Preserve earlier native capability errors without creating unsupported tasks. */
 static int nacre_clone_reject(struct kernel_clone_args *args)
 {
@@ -2815,9 +2804,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	struct task_struct *p;
 	int trace = 0;
 	pid_t nr;
-#ifdef NACC
-	pid_t nacc_nr;
-
+#ifdef NACRE
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         bool libc_fork = clone_flags == (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID) &&
                          !args->stack && !args->tls && !args->parent_tid;
@@ -2895,10 +2882,6 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 
 	pid = get_task_pid(p, PIDTYPE_PID);
 	nr = pid_vnr(pid);
-#ifdef NACC
-	nacc_nr = pid_nr(pid);
-#endif
-
 	if (clone_flags & CLONE_PARENT_SETTID)
 		put_user(nr, args->parent_tid);
 
@@ -2914,10 +2897,6 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 		lru_gen_add_mm(p->mm);
 		task_unlock(p);
 	}
-
-#ifdef NACC
-	nacc_register_forked_child_pid(nacc_nr);
-#endif
 
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         nacre_fork_publish(p);

@@ -167,9 +167,9 @@ IF_HAVE_PG_NACRE(nacre)
 #endif
 
 #ifdef CONFIG_64BIT
-# define IF_HAVE_VM_NACC_APP(flag, name) {flag, name},
+# define IF_HAVE_VM_NACRE_APP(flag, name) {flag, name},
 #else
-# define IF_HAVE_VM_NACC_APP(flag, name)
+# define IF_HAVE_VM_NACRE_APP(flag, name)
 #endif
 
 #define __def_vmaflag_names						\
@@ -205,7 +205,7 @@ IF_HAVE_VM_SOFTDIRTY(VM_SOFTDIRTY,	"softdirty"	)		\
 	{VM_HUGEPAGE,			"hugepage"	},		\
 	{VM_NOHUGEPAGE,			"nohugepage"	},		\
 IF_HAVE_VM_DROPPABLE(VM_DROPPABLE,	"droppable"	)		\
-IF_HAVE_VM_NACC_APP(VM_NACC_APP,	"nacc_app"	)		\
+IF_HAVE_VM_NACRE_APP(VM_NACRE_APP,	"nacre_app"	)		\
 	{VM_MERGEABLE,			"mergeable"	}		\
 
 #define show_vma_flags(flags)						\

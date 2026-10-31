@@ -6,7 +6,7 @@
 #include <linux/freezer.h>
 
 #include "futex.h"
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_registration.h>
 #endif
 
@@ -624,7 +624,7 @@ retry:
 retry_private:
 	*hb = futex_q_lock(q);
 
-#ifdef NACC
+#ifdef NACRE
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         /* AS prefaulted this exact word. Compare after locking, never against
          * a staging copy; an unmapped word returns EFAULT without S uaccess. */

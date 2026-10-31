@@ -11,8 +11,8 @@
 
 #include <asm/pgtable-bits.h>
 
-#ifdef NACC
-#include <asm/nacc.h>
+#ifdef NACRE
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 #endif
 
@@ -414,12 +414,12 @@ static inline int pte_special(pte_t pte)
 	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_SPECIAL;
 }
 
-static inline bool pte_nacc(pte_t pte)
+static inline bool pte_nacre(pte_t pte)
 {
 #ifdef CONFIG_64BIT
 	/* Swap/migration and valid nonleaf encodings are not private leaves. */
 	return !(pte_val(pte) >> 54) &&
-	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_NACC &&
+	       (pte_val(pte) & _PAGE_SOFT) == _PAGE_NACRE &&
 	       (((pte_val(pte) & _PAGE_PRESENT) &&
 	         (pte_val(pte) & _PAGE_LEAF)) ||
 	        (!(pte_val(pte) & _PAGE_PRESENT) &&
@@ -429,10 +429,10 @@ static inline bool pte_nacc(pte_t pte)
 #endif
 }
 
-static inline pte_t pte_mknacc(pte_t pte)
+static inline pte_t pte_mknacre(pte_t pte)
 {
 #ifdef CONFIG_64BIT
-	return __pte((pte_val(pte) & ~_PAGE_SOFT) | _PAGE_NACC);
+	return __pte((pte_val(pte) & ~_PAGE_SOFT) | _PAGE_NACRE);
 #else
 	return pte;
 #endif

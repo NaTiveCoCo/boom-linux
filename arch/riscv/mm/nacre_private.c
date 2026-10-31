@@ -6,7 +6,7 @@
 #include <linux/pagemap.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
@@ -33,7 +33,7 @@ void nacre_protnone_finish(struct mm_struct *mm, unsigned long start,
 void nacre_private_released(unsigned long old, unsigned long retired)
 {
 	struct page *page = pfn_to_page(pte_pfn(__pte(old)));
-	BUG_ON(!pte_nacc(__pte(old)) || !PageNacre(page) || retired > 1);
+	BUG_ON(!pte_nacre(__pte(old)) || !PageNacre(page) || retired > 1);
 	if (retired) {
 		ClearPageNacre(page);
 		/* The last PTE was revoked, fenced and scrubbed before NORMAL. */
@@ -86,7 +86,7 @@ static int candidate(pte_t *slot, unsigned long addr, unsigned long end,
 {
 	struct takeover *t = walk->private;
 	pte_t pte = ptep_get(slot);
-	if (pte_none(pte) || pte_nacc(pte))
+	if (pte_none(pte) || pte_nacre(pte))
 		return 0;
 	if (!pte_present(pte) || (!pte_user(pte) && !resident_protnone(pte)) || pte_devmap(pte))
 		return -EOPNOTSUPP;
@@ -189,15 +189,15 @@ int nacre_private_prepare(struct mm_struct *mm)
 	BUG_ON(mm->context.nacre_private);
 	mm->context.nacre_private = 1;
 	for_each_vma(vmi, vma) {
-		if (vma->vm_start == NACC_AGENT_VA_BASE || nacre_buffer_vma(vma))
+		if (vma->vm_start == NACRE_AGENT_VA_BASE || nacre_buffer_vma(vma))
 			continue;
-		if (nacc_vma_is_vdso_text(vma)) {
+		if (nacre_vma_is_vdso_text(vma)) {
 			/* Drop any old normal mapping through native rmap/RSS accounting. */
 			zap_page_range_single(vma, vma->vm_start,
 					      vma->vm_end - vma->vm_start, NULL);
 			vm_flags_set(vma, VM_MIXEDMAP);
-			rc = nacc_adopt_vdso_text(vma);
-		} else if (nacc_vma_is_vvar_abi_data(vma)) {
+			rc = nacre_adopt_vdso_text(vma);
+		} else if (nacre_vma_is_vvar_abi_data(vma)) {
 			/* Re-fault public ABI pages with a record after PTE allocation. */
 			zap_page_range_single(vma, vma->vm_start,
 					      vma->vm_end - vma->vm_start, NULL);
@@ -205,7 +205,7 @@ int nacre_private_prepare(struct mm_struct *mm)
 		} else if (vma->vm_flags & (VM_SHARED | VM_MAYSHARE | VM_IO | VM_PFNMAP | VM_MIXEDMAP)) {
 			rc = -EOPNOTSUPP;
 		} else {
-			vm_flags_set(vma, VM_NACC_APP);
+			vm_flags_set(vma, VM_NACRE_APP);
 			rc = take_vma(vma);
 		}
 		if (rc)

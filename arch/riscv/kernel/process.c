@@ -39,9 +39,6 @@ unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
 #endif
 
-#define NACC_AGENT_MEM_BASE     0x190000000
-#define NACC_AGENT_MEM_SIZE	    0x10000000
-
 extern asmlinkage void ret_from_fork(void);
 
 void noinstr arch_cpu_idle(void)
@@ -243,16 +240,6 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 		childregs->a0 = 0; /* Return value of fork() */
 		p->thread.s[0] = 0;
 	}
-	/*
-	 * First try fork + exec.
-	 * Only set NACC_FORKED when parent is a NaCC-inited process.
-	 */
-	if (!args->fn && (current->thread.nacc_flag & NACC_INITED)) {
-		p->thread.nacc_flag = NACC_FORKED;
-		set_notify_resume(p);
-	} else
-		p->thread.nacc_flag = 0;
-
 	p->thread.riscv_v_flags = 0;
 	if (has_vector())
 		riscv_v_thread_alloc(p);

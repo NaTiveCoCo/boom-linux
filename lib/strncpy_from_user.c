@@ -20,29 +20,29 @@
 	(((long) dst | (long) src) & (sizeof(long) - 1))
 #endif
 
-#ifdef NACC
-static __always_inline long nacc_strncpy_from_user_staged_result(
-	const struct nacc_uaccess_string_read_desc *desc,
+#ifdef NACRE
+static __always_inline long nacre_strncpy_from_user_staged_result(
+	const struct nacre_uaccess_string_read_desc *desc,
 	unsigned long count, unsigned long max)
 {
-	if (desc->nul_index != NACC_UACCESS_STRING_READ_NO_NUL)
+	if (desc->nul_index != NACRE_UACCESS_STRING_READ_NO_NUL)
 		return desc->nul_index;
 	if (max >= count)
 		return count;
 	return -EFAULT;
 }
 
-static __always_inline void nacc_strncpy_from_user_init_desc(
-	struct nacc_uaccess_string_read_desc *desc, char *dst,
+static __always_inline void nacre_strncpy_from_user_init_desc(
+	struct nacre_uaccess_string_read_desc *desc, char *dst,
 	unsigned long count, unsigned long caller_pc)
 {
-	*desc = (struct nacc_uaccess_string_read_desc) {
-		.version = NACC_UACCESS_STRING_READ_DESC_VERSION,
-		.op = NACC_UACCESS_STRING_READ_OP_COPY_CSTR,
+	*desc = (struct nacre_uaccess_string_read_desc) {
+		.version = NACRE_UACCESS_STRING_READ_DESC_VERSION,
+		.op = NACRE_UACCESS_STRING_READ_OP_COPY_CSTR,
 		.buffer_va = (unsigned long)dst,
 		.buffer_bytes = count,
 		.count = count,
-		.nul_index = NACC_UACCESS_STRING_READ_NO_NUL,
+		.nul_index = NACRE_UACCESS_STRING_READ_NO_NUL,
 		.caller_pc = caller_pc,
 	};
 }
@@ -153,28 +153,28 @@ long strncpy_from_user(char *dst, const char __user *src, long count)
 		long retval;
 
 		src = masked_user_access_begin(src);
-#ifdef NACC
+#ifdef NACRE
 		{
-			struct nacc_uaccess_string_read_desc nacc_desc;
-			int nacc_ret;
+			struct nacre_uaccess_string_read_desc nacre_desc;
+			int nacre_ret;
 
-			nacc_strncpy_from_user_init_desc(&nacc_desc, dst,
+			nacre_strncpy_from_user_init_desc(&nacre_desc, dst,
 							 count, _RET_IP_);
-			nacc_ret = nacc_uaccess_string_read_begin(
-				(unsigned long)src, count, &nacc_desc);
-			if (nacc_ret > 0) {
-				retval = nacc_strncpy_from_user_staged_result(
-					&nacc_desc, count, count);
-				if (!nacc_uaccess_scope_end(
-					    NACC_UACCESS_SCOPE_STRING_READ,
-					    NACC_UACCESS_SCOPE_DIR_FROM_USER,
+			nacre_ret = nacre_uaccess_string_read_begin(
+				(unsigned long)src, count, &nacre_desc);
+			if (nacre_ret > 0) {
+				retval = nacre_strncpy_from_user_staged_result(
+					&nacre_desc, count, count);
+				if (!nacre_uaccess_scope_end(
+					    NACRE_UACCESS_SCOPE_STRING_READ,
+					    NACRE_UACCESS_SCOPE_DIR_FROM_USER,
 					    (unsigned long)src, count,
 					    retval))
 					retval = -EFAULT;
 				user_read_access_end();
 				return retval;
 			}
-			if (nacc_ret < 0) {
+			if (nacre_ret < 0) {
 				user_read_access_end();
 				return -EFAULT;
 			}
@@ -201,27 +201,27 @@ long strncpy_from_user(char *dst, const char __user *src, long count)
 		kasan_check_write(dst, count);
 		check_object_size(dst, count, false);
 		if (user_read_access_begin(src, max)) {
-#ifdef NACC
-			struct nacc_uaccess_string_read_desc nacc_desc;
-			int nacc_ret;
+#ifdef NACRE
+			struct nacre_uaccess_string_read_desc nacre_desc;
+			int nacre_ret;
 
-			nacc_strncpy_from_user_init_desc(&nacc_desc, dst,
+			nacre_strncpy_from_user_init_desc(&nacre_desc, dst,
 							 count, _RET_IP_);
-			nacc_ret = nacc_uaccess_string_read_begin(
-				(unsigned long)src, max, &nacc_desc);
-			if (nacc_ret > 0) {
-				retval = nacc_strncpy_from_user_staged_result(
-					&nacc_desc, count, max);
-				if (!nacc_uaccess_scope_end(
-					    NACC_UACCESS_SCOPE_STRING_READ,
-					    NACC_UACCESS_SCOPE_DIR_FROM_USER,
+			nacre_ret = nacre_uaccess_string_read_begin(
+				(unsigned long)src, max, &nacre_desc);
+			if (nacre_ret > 0) {
+				retval = nacre_strncpy_from_user_staged_result(
+					&nacre_desc, count, max);
+				if (!nacre_uaccess_scope_end(
+					    NACRE_UACCESS_SCOPE_STRING_READ,
+					    NACRE_UACCESS_SCOPE_DIR_FROM_USER,
 					    (unsigned long)src, max,
 					    retval))
 					retval = -EFAULT;
 				user_read_access_end();
 				return retval;
 			}
-			if (nacc_ret < 0) {
+			if (nacre_ret < 0) {
 				user_read_access_end();
 				return -EFAULT;
 			}

@@ -24,7 +24,7 @@
 #include <linux/proc_ns.h>
 #include <linux/file.h>
 #include <linux/syscalls.h>
-#ifdef NACC
+#ifdef NACRE
 #include <linux/mm.h>
 #include <asm/nacre_ptp.h>
 #endif
@@ -570,7 +570,7 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 	if (err)
 		goto out;
 
-#ifdef NACC
+#ifdef NACRE
 	/* A pidfd may install several namespace types; only reviewed nsfs views enter. */
 	if (nacre_mm_private(current->mm) && !ns) {
 		err = -EOPNOTSUPP;
@@ -586,7 +586,7 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 		err = validate_ns(&nsset, ns);
 	else
 		err = validate_nsset(&nsset, pidfd_pid(fd_file(f)));
-#ifdef NACC
+#ifdef NACRE
 	/* pidns_install validates capabilities/ancestry on this temporary nsset.
 	 * Preserve its native errors, but never commit a private task's PID binding. */
 	if (!err && nacre_mm_private(current->mm) && (flags & CLONE_NEWPID))

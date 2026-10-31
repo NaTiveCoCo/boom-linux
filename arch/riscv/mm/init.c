@@ -211,8 +211,8 @@ static int __init early_mem(char *p)
 }
 early_param("mem", early_mem);
 
-#define NACC_PTP_BASE       0x1b0000000
-#define NACC_PTP_SIZE	    0x10000000
+#define NACRE_PTP_BASE       0x1b0000000
+#define NACRE_PTP_SIZE	    0x10000000
 
 static void __init parse_memmap_one(char *p)
 {
@@ -269,8 +269,8 @@ early_param("memmap", parse_memmap_opt);
 //     struct page *page;
 //     struct ptdesc *ptdesc;
 
-//     pfn = PFN_DOWN(NACC_PTP_BASE);
-//     end_pfn = PFN_DOWN(NACC_PTP_BASE + NACC_PTP_SIZE);
+//     pfn = PFN_DOWN(NACRE_PTP_BASE);
+//     end_pfn = PFN_DOWN(NACRE_PTP_BASE + NACRE_PTP_SIZE);
 
 //     pr_info("[Linux] Initializing reserved page tables: PFN 0x%lx - 0x%lx\n", pfn, end_pfn);
 

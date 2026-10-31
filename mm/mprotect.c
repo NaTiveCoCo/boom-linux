@@ -35,7 +35,7 @@
 #include <uapi/linux/mman.h>
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
@@ -111,10 +111,6 @@ static long change_pte_range(struct mmu_gather *tlb,
 	arch_enter_lazy_mmu_mode();
 	do {
 		oldpte = ptep_get(pte);
-		if (current->thread.nacc_flag & NACC_INITED) {
-			nacc_debug("[change_pte_range]: oldpte: %lx, addr: %lx, vpn[2]: %ld vpn[1]: %ld vpn[0]: %ld, vma: %p\n",
-				   pte_val(oldpte), addr, (addr >> 30) & 0x1ff, (addr >> 21) & 0x1ff, (addr >> 12) & 0x1ff, vma);
-		}
 		if (pte_present(oldpte)) {
 			pte_t ptent;
 
@@ -174,10 +170,6 @@ static long change_pte_range(struct mmu_gather *tlb,
 
 			oldpte = ptep_modify_prot_start(vma, addr, pte);
 			ptent = pte_modify(oldpte, newprot);
-			if (current->thread.nacc_flag & NACC_INITED) {
-				nacc_debug("[change_pte_range]: oldpte: %lx, newprot: %lx ptent: %lx\n",
-					   pte_val(oldpte), pgprot_val(newprot), pte_val(ptent));
-			}
 
 			if (uffd_wp)
 				ptent = pte_mkuffd_wp(ptent);
@@ -633,7 +625,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 
 	/* Immutable vDSO and public read-only vvar keep their ABI permissions. */
 	if (nacre_mm_private(mm) &&
-	    (nacc_vma_is_vdso_text(vma) || nacc_vma_is_vvar_abi_data(vma)) &&
+	    (nacre_vma_is_vdso_text(vma) || nacre_vma_is_vvar_abi_data(vma)) &&
 	    ((newflags ^ oldflags) & VM_ACCESS_FLAGS))
 		return -EACCES;
 

@@ -801,7 +801,7 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 
 	if (pte_present(ptent)) {
 		page = vm_normal_page(vma, addr, ptent);
-#ifdef NACC
+#ifdef NACRE
 		if (!page)
 			page = nacre_private_page_metadata(vma, addr, ptent);
 #endif
@@ -989,7 +989,7 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		[ilog2(VM_DROPPABLE)] = "dp",
 #endif
 #ifdef CONFIG_64BIT
-		[ilog2(VM_NACC_APP)] = "na",
+		[ilog2(VM_NACRE_APP)] = "na",
 #endif
 #ifdef CONFIG_64BIT
 		[ilog2(VM_SEALED)] = "sl",

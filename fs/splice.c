@@ -39,8 +39,8 @@
 #include <linux/net.h>
 #include <linux/socket.h>
 #include <linux/sched/signal.h>
-#if defined(CONFIG_RISCV) && defined(NACC)
-#include <asm/nacc.h>
+#if defined(CONFIG_RISCV) && defined(NACRE)
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 #endif
 
@@ -1504,8 +1504,8 @@ out:
 	return total ? total : ret;
 }
 
-#if defined(CONFIG_RISCV) && defined(NACC)
-static ssize_t nacc_copy_iter_to_pipe(struct iov_iter *from,
+#if defined(CONFIG_RISCV) && defined(NACRE)
+static ssize_t nacre_copy_iter_to_pipe(struct iov_iter *from,
 				      struct pipe_inode_info *pipe)
 {
 	size_t total = 0;
@@ -1585,7 +1585,7 @@ static ssize_t vmsplice_to_user(struct file *file, struct iov_iter *iter,
 
 	if (!pipe)
 		return -EBADF;
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 	/* Validate the actual file before any private data access or retained page. */
 	if (current->mm && nacre_mm_private(current->mm))
 		return -EOPNOTSUPP;
@@ -1623,7 +1623,7 @@ static ssize_t vmsplice_to_pipe(struct file *file, struct iov_iter *iter,
 	pipe = get_pipe_info(file, true);
 	if (!pipe)
 		return -EBADF;
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 	/* Validate the actual file before any private data access or retained page. */
 	if (current->mm && nacre_mm_private(current->mm))
 		return -EOPNOTSUPP;
@@ -1634,9 +1634,9 @@ static ssize_t vmsplice_to_pipe(struct file *file, struct iov_iter *iter,
 	pipe_lock(pipe);
 	ret = wait_for_space(pipe, flags);
 	if (!ret) {
-#if defined(CONFIG_RISCV) && defined(NACC)
-		if (nacc_private_data_uaccess_active() && user_backed_iter(iter))
-			ret = nacc_copy_iter_to_pipe(iter, pipe);
+#if defined(CONFIG_RISCV) && defined(NACRE)
+		if (nacre_private_data_uaccess_active() && user_backed_iter(iter))
+			ret = nacre_copy_iter_to_pipe(iter, pipe);
 		else
 #endif
 		ret = iter_to_pipe(iter, pipe, buf_flag);

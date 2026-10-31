@@ -383,7 +383,7 @@ loff_t vfs_clone_file_range(struct file *file_in, loff_t pos_in,
 
 	WARN_ON_ONCE(remap_flags & REMAP_FILE_DEDUP);
 
-#ifdef NACC
+#ifdef NACRE
 	/* Held file references, before filesystem callbacks can copy private contents. */
 	ret = shmem_file(file_in) ? nacre_shmem_io(file_inode(file_in)) : 0;
 	if (ret)

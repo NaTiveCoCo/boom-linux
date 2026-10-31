@@ -22,7 +22,7 @@
 #include <asm/byteorder.h>
 #include <asm/extable.h>
 #include <asm/asm.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm-generic/access_ok.h>
 
 #define __enable_user_access()							\
@@ -90,18 +90,18 @@ do {								\
 } while (0)
 #endif /* CONFIG_64BIT */
 
-#ifdef NACC
-#define __nacc_get_user_private_or_asm(insn, x, ptr, err)	\
+#ifdef NACRE
+#define __nacre_get_user_private_or_asm(insn, x, ptr, err)	\
 do {								\
-	unsigned long __nacc_value;				\
-	int __nacc_ret;					\
+	unsigned long __nacre_value;				\
+	int __nacre_ret;					\
 								\
-	__nacc_ret = nacc_private_data_get_user_read(		\
+	__nacre_ret = nacre_private_data_get_user_read(		\
 		(unsigned long)(ptr), sizeof(*(ptr)),		\
-		&__nacc_value);					\
-	if (__nacc_ret > 0)					\
-		(x) = (__force __typeof__(x))__nacc_value;	\
-	else if (__nacc_ret < 0) {				\
+		&__nacre_value);					\
+	if (__nacre_ret > 0)					\
+		(x) = (__force __typeof__(x))__nacre_value;	\
+	else if (__nacre_ret < 0) {				\
 		(err) = -EFAULT;				\
 		(x) = (__force __typeof__(x))0;			\
 	} else {						\
@@ -109,17 +109,17 @@ do {								\
 	}							\
 } while (0)
 
-#define __nacc_get_user_private_or_8(x, ptr, err)		\
+#define __nacre_get_user_private_or_8(x, ptr, err)		\
 do {								\
-	unsigned long __nacc_value;				\
-	int __nacc_ret;					\
+	unsigned long __nacre_value;				\
+	int __nacre_ret;					\
 								\
-	__nacc_ret = nacc_private_data_get_user_read(		\
+	__nacre_ret = nacre_private_data_get_user_read(		\
 		(unsigned long)(ptr), sizeof(*(ptr)),		\
-		&__nacc_value);					\
-	if (__nacc_ret > 0)					\
-		(x) = (__force __typeof__(x))__nacc_value;	\
-	else if (__nacc_ret < 0) {				\
+		&__nacre_value);					\
+	if (__nacre_ret > 0)					\
+		(x) = (__force __typeof__(x))__nacre_value;	\
+	else if (__nacre_ret < 0) {				\
 		(err) = -EFAULT;				\
 		(x) = (__force __typeof__(x))0;			\
 	} else {						\
@@ -127,9 +127,9 @@ do {								\
 	}							\
 } while (0)
 #else
-#define __nacc_get_user_private_or_asm(insn, x, ptr, err)	\
+#define __nacre_get_user_private_or_asm(insn, x, ptr, err)	\
 	__get_user_asm(insn, (x), ptr, err)
-#define __nacc_get_user_private_or_8(x, ptr, err)		\
+#define __nacre_get_user_private_or_8(x, ptr, err)		\
 	__get_user_8((x), ptr, err)
 #endif
 
@@ -137,19 +137,19 @@ do {								\
 do {								\
 	switch (sizeof(*__gu_ptr)) {				\
 	case 1:							\
-		__nacc_get_user_private_or_asm("lb", (x),	\
+		__nacre_get_user_private_or_asm("lb", (x),	\
 					       __gu_ptr, __gu_err);	\
 		break;						\
 	case 2:							\
-		__nacc_get_user_private_or_asm("lh", (x),	\
+		__nacre_get_user_private_or_asm("lh", (x),	\
 					       __gu_ptr, __gu_err);	\
 		break;						\
 	case 4:							\
-		__nacc_get_user_private_or_asm("lw", (x),	\
+		__nacre_get_user_private_or_asm("lw", (x),	\
 					       __gu_ptr, __gu_err);	\
 		break;						\
 	case 8:							\
-		__nacc_get_user_private_or_8((x), __gu_ptr,	\
+		__nacre_get_user_private_or_8((x), __gu_ptr,	\
 					     __gu_err);		\
 		break;						\
 	default:						\
@@ -274,20 +274,20 @@ do {								\
 	}							\
 } while (0)
 
-#ifdef NACC
-#define __nacc_put_user_private_or_nocheck(x, ptr, err)		\
+#ifdef NACRE
+#define __nacre_put_user_private_or_nocheck(x, ptr, err)		\
 do {									\
-	int __nacc_ret;							\
+	int __nacre_ret;							\
 									\
-	__nacc_ret = nacc_private_data_put_user_write(			\
+	__nacre_ret = nacre_private_data_put_user_write(			\
 		(unsigned long)(ptr), &(x), sizeof(*(ptr)));		\
-	if (__nacc_ret < 0)						\
+	if (__nacre_ret < 0)						\
 		(err) = -EFAULT;					\
-	else if (!__nacc_ret)						\
+	else if (!__nacre_ret)						\
 		__put_user_nocheck((x), ptr, err);			\
 } while (0)
 #else
-#define __nacc_put_user_private_or_nocheck(x, ptr, err)		\
+#define __nacre_put_user_private_or_nocheck(x, ptr, err)		\
 	__put_user_nocheck((x), ptr, err)
 #endif
 
@@ -321,7 +321,7 @@ do {									\
 	__chk_user_ptr(__gu_ptr);				\
 								\
 	__enable_user_access();					\
-	__nacc_put_user_private_or_nocheck(__val, __gu_ptr,	\
+	__nacre_put_user_private_or_nocheck(__val, __gu_ptr,	\
 					   __pu_err);		\
 	__disable_user_access();				\
 								\
@@ -366,18 +366,18 @@ raw_copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long ret;
 
-#ifdef NACC
-	if (n && nacc_private_data_uaccess_active()) {
-		int nacc_ret;
+#ifdef NACRE
+	if (n && nacre_private_data_uaccess_active()) {
+		int nacre_ret;
 
 		__enable_user_access();
-		nacc_ret = nacc_private_data_copy_from_user((unsigned long)to,
+		nacre_ret = nacre_private_data_copy_from_user((unsigned long)to,
 							    (unsigned long)from,
 							    n, _RET_IP_, &ret);
 		__disable_user_access();
-		if (nacc_ret > 0)
+		if (nacre_ret > 0)
 			return ret;
-		if (nacc_ret < 0)
+		if (nacre_ret < 0)
 			return n;
 	}
 #endif
@@ -391,18 +391,18 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	unsigned long ret;
 
-#ifdef NACC
-	if (n && nacc_private_data_uaccess_active()) {
-		int nacc_ret;
+#ifdef NACRE
+	if (n && nacre_private_data_uaccess_active()) {
+		int nacre_ret;
 
 		__enable_user_access();
-		nacc_ret = nacc_private_data_copy_to_user((unsigned long)to,
+		nacre_ret = nacre_private_data_copy_to_user((unsigned long)to,
 							  (unsigned long)from,
 							  n, _RET_IP_, &ret);
 		__disable_user_access();
-		if (nacc_ret > 0)
+		if (nacre_ret > 0)
 			return ret;
-		if (nacc_ret < 0)
+		if (nacre_ret < 0)
 			return n;
 	}
 #endif
@@ -427,15 +427,15 @@ unsigned long __must_check clear_user(void __user *to, unsigned long n)
 	if (!access_ok(to, n))
 		return n;
 
-#ifdef NACC
-	if (n && nacc_private_data_uaccess_active()) {
-		int nacc_ret;
+#ifdef NACRE
+	if (n && nacre_private_data_uaccess_active()) {
+		int nacre_ret;
 
-		nacc_ret = nacc_private_data_clear_user((unsigned long)to,
+		nacre_ret = nacre_private_data_clear_user((unsigned long)to,
 							n, _RET_IP_, &ret);
-		if (nacc_ret > 0)
+		if (nacre_ret > 0)
 			return ret;
-		if (nacc_ret < 0)
+		if (nacre_ret < 0)
 			return n;
 	}
 #endif

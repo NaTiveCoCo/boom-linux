@@ -77,10 +77,6 @@
 #include <asm/nacre_ptp.h>
 #endif
 
-#ifdef NACC
-#include <asm/nacc.h>
-#endif
-
 #include <trace/events/task.h>
 #include "internal.h"
 
@@ -397,18 +393,6 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	nacre_mm_init(mm, false);
 #endif
 
-#ifdef NACC
-	if (current->thread.nacc_flag == NACC_PREPARE ||
-	    current->thread.nacc_flag == NACC_INITED ||
-	    current->thread.nacc_flag == NACC_FORKED ||
-	    current->thread.nacc_flag == NACC_EXEC) {
-		if (!nacc_mm_is_active(mm))
-			nacc_mm_set_state(mm, NACC_MM_ACTIVE);
-		nacc_debug("[Linux]: bprm_mm_init: mark new mm=%px as NACC_MM_ACTIVE for pid %d flag=%lx\n",
-			   mm, current->pid, current->thread.nacc_flag);
-	}
-#endif
-
 	/* Save current stack limit for all calculations made during exec. */
 	task_lock(current->group_leader);
 	bprm->rlim_stack = current->signal->rlim[RLIMIT_STACK];
@@ -425,17 +409,6 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 		bprm->mm = NULL;
 		mmput(mm);
 		return err;
-	}
-#endif
-
-#ifdef NACC
-	if (current->thread.nacc_flag == NACC_PREPARE ||
-	    current->thread.nacc_flag == NACC_INITED ||
-	    current->thread.nacc_flag == NACC_FORKED ||
-	    current->thread.nacc_flag == NACC_EXEC) {
-		err = nacc_reserve_agent_slot_mm(mm, "bprm_mm_init");
-		if (err)
-			goto err;
 	}
 #endif
 
@@ -1022,13 +995,16 @@ static int exec_mmap(struct mm_struct *mm)
 		 * out and die instead of going through with the exec.
 		 */
 #ifdef CONFIG_RISCV
-        /* Private exec removes its task lease before switching mm. The commit
-         * hook downgrades this lock to match the native read-unlock below. */
-        if (tsk->thread.nacre_flag == NACRE_HANDOFF)
-            ret = mmap_write_lock_killable(old_mm);
-        else
+		/* Private exec removes its task lease before switching mm. The commit
+		 * hook downgrades this lock to match the native read-unlock below. */
+		if (tsk->thread.nacre_flag == NACRE_HANDOFF) {
+			ret = mmap_write_lock_killable(old_mm);
+		} else {
 #endif
-		ret = mmap_read_lock_killable(old_mm);
+			ret = mmap_read_lock_killable(old_mm);
+#ifdef CONFIG_RISCV
+		}
+#endif
 		if (ret) {
 			up_write(&tsk->signal->exec_update_lock);
 			return ret;
@@ -1067,11 +1043,14 @@ static int exec_mmap(struct mm_struct *mm)
 		setmax_mm_hiwater_rss(&tsk->signal->maxrss, old_mm);
 		mm_update_next_owner(old_mm);
 #ifdef CONFIG_RISCV
-        if (old_mm->context.nacre_prepared)
-            nacre_exec_mmput(old_mm);
-        else
+		if (old_mm->context.nacre_prepared) {
+			nacre_exec_mmput(old_mm);
+		} else {
 #endif
-		mmput(old_mm);
+			mmput(old_mm);
+#ifdef CONFIG_RISCV
+		}
+#endif
 		return 0;
 	}
 	mmdrop_lazy_tlb(active_mm);
@@ -1341,20 +1320,6 @@ int begin_new_exec(struct linux_binprm * bprm)
 	if (retval)
 		goto out;
 
-#ifdef NACC
-	/*
-	 * Exec-build security is now keyed off the new bprm->mm state that was
-	 * set in bprm_mm_init(). Keep this late flag switch only as a dispatch
-	 * fallback so the post-exec NaCC reattach path still runs if an older
-	 * caller somehow skipped nacc_prepare_exec_build_state().
-	 */
-	if (me->thread.nacc_flag & NACC_INITED) {
-		nacc_debug("[Linux]: execve: late dispatch fallback switches nacc_flag to NACC_EXEC after exec_mmap for pid %d\n",
-			   me->pid);
-		me->thread.nacc_flag = NACC_EXEC;
-	}
-#endif
-
 	bprm->mm = NULL;
 
 	retval = exec_task_namespaces();
@@ -1553,35 +1518,8 @@ static void do_close_execat(struct file *file)
 		fput(file);
 }
 
-#ifdef NACC
-static void nacc_prepare_exec_build_state(struct linux_binprm *bprm)
-{
-	if (current->thread.nacc_flag != NACC_INITED)
-		return;
-
-	current->thread.nacc_flag = NACC_EXEC;
-	nacc_debug("[Linux]: execve: switch nacc_flag to NACC_EXEC before bprm_mm_init for pid %d\n",
-		   current->pid);
-}
-
-static void nacc_restore_exec_build_state(struct linux_binprm *bprm)
-{
-	if (bprm->point_of_no_return)
-		return;
-
-	if (current->thread.nacc_flag == NACC_EXEC) {
-		current->thread.nacc_flag = NACC_INITED;
-		nacc_debug("[Linux]: execve: restore nacc_flag to NACC_INITED after pre-commit exec failure for pid %d\n",
-			   current->pid);
-	}
-}
-#endif
-
 static void free_bprm(struct linux_binprm *bprm)
 {
-#ifdef NACC
-	nacc_restore_exec_build_state(bprm);
-#endif
 	if (bprm->mm) {
 		acct_arg_size(bprm, 0);
 		mmput(bprm->mm);
@@ -1645,10 +1583,6 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 		bprm->filename = bprm->fdpath;
 	}
 	bprm->interp = bprm->filename;
-
-#ifdef NACC
-	nacc_prepare_exec_build_state(bprm);
-#endif
 
 	retval = bprm_mm_init(bprm);
 	if (!retval)
@@ -1881,9 +1815,6 @@ static int search_binary_handler(struct linux_binprm *bprm)
 /* binfmt handlers will call back into begin_new_exec() on success. */
 static int exec_binprm(struct linux_binprm *bprm)
 {
-    if(current->thread.nacc_flag == 2) {
-        nacc_debug("nacc: exec_binprm called when nacc_flag is 2\n");
-    }
 	pid_t old_pid, old_vpid;
 	int ret, depth;
 
@@ -1968,21 +1899,6 @@ static int bprm_execve(struct linux_binprm *bprm)
 	if (retval)
 		goto out;
 #endif
-#ifdef NACC
-	if (current->thread.nacc_flag == NACC_PREPARE) {
-		nacc_invoke();
-	} else if (current->thread.nacc_flag == NACC_FORKED) {
-		nacc_invoke_child();
-	} else if (current->thread.nacc_flag == NACC_EXEC) {
-		/*
-		 * Same-PID reexec and fork+exec converge here: Linux has
-		 * already built the fresh exec mm, and the NaCC exec attach
-		 * path now prepares that mm for secure ownership without
-		 * requiring unconditional bulk PTP transfer.
-		 */
-		nacc_exec();
-	}
-	#endif
     return retval;
 
 out:
@@ -2036,14 +1952,6 @@ static int do_execveat_common(int fd, struct filename *filename,
 		retval = PTR_ERR(bprm);
 		goto out_ret;
 	}
-
-#ifdef NACC
-	if (current->thread.nacc_flag) {
-		nacc_debug("[Linux]: do_execveat_common pid=%d comm=%s nacc_flag=%lx filename=%s\n",
-			   current->pid, current->comm,
-			   current->thread.nacc_flag, bprm->filename);
-	}
-#endif
 
 	retval = count(argv, MAX_ARG_STRINGS);
 	if (retval == 0)

@@ -12,10 +12,6 @@ static void tlb_flush(struct mmu_gather *tlb);
 
 #ifdef CONFIG_MMU
 #include <linux/swap.h>
-#ifdef NACC
-#include <asm/nacc.h>
-#endif
-
 /*
  * While riscv platforms with riscv_ipi_for_rfence as true require an IPI to
  * perform TLB shootdown, some platforms with riscv_ipi_for_rfence as false use
@@ -37,13 +33,6 @@ static inline void __tlb_remove_table(void *table)
 static inline void tlb_flush(struct mmu_gather *tlb)
 {
 #ifdef CONFIG_MMU
-#ifdef NACC
-	/* Unmigrated Agent subtree teardown; NACRE uses its own mm state. */
-	if (nacc_mm_root_tagged(tlb->mm)) {
-		nacc_flush_and_drain_sbi(tlb->mm);
-		return;
-	}
-#endif
 	if (tlb->fullmm || tlb->need_flush_all || tlb->freed_tables)
 		flush_tlb_mm(tlb->mm);
 	else

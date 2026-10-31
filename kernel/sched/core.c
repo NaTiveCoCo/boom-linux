@@ -68,13 +68,6 @@
 #include <linux/workqueue_api.h>
 
 
-#ifdef NACC
-#define SBI_EXT_NACC 0x4E414343
-
-#define SBI_EXT_LINUX_VERIFY 0x4
-
-#endif
-
 #ifdef CONFIG_PREEMPT_DYNAMIC
 # ifdef CONFIG_GENERIC_ENTRY
 #  include <linux/entry-common.h>
@@ -84,7 +77,7 @@
 #include <uapi/linux/sched/types.h>
 
 #include <asm/irq_regs.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
 #include <asm/page.h>
@@ -5275,43 +5268,6 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 	calculate_sigpending();
 }
 
-#ifdef NACC
-struct sbiret {
-	unsigned long error;
-	unsigned long value;
-};
-
-struct sbiret sbi_ecall(int ext, int fid, unsigned long arg0,
-			unsigned long arg1, unsigned long arg2,
-			unsigned long arg3, unsigned long arg4,
-			unsigned long arg5)
-{
-	struct sbiret ret;
-	register unsigned long a0 asm ("a0") = (unsigned long)(arg0);
-	register unsigned long a1 asm ("a1") = (unsigned long)(arg1);
-	register unsigned long a2 asm ("a2") = (unsigned long)(arg2);
-	register unsigned long a3 asm ("a3") = (unsigned long)(arg3);
-	register unsigned long a4 asm ("a4") = (unsigned long)(arg4);
-	register unsigned long a5 asm ("a5") = (unsigned long)(arg5);
-	register unsigned long a6 asm ("a6") = (unsigned long)(fid);
-	register unsigned long a7 asm ("a7") = (unsigned long)(ext);
-	asm volatile ("ecall"
-		      : "+r" (a0), "+r" (a1)
-		      : "r" (a2), "r" (a3), "r" (a4), "r" (a5), "r" (a6), "r" (a7)
-		      : "memory");
-	ret.error = a0;
-	ret.value = a1;
-
-	return ret;
-}
-
-static void nacc_sched_verify(unsigned long prev_pid, unsigned long next_pid)
-{
-	sbi_ecall(SBI_EXT_NACC, SBI_EXT_LINUX_VERIFY, prev_pid, next_pid,
-		  0, 0, 0, 0);
-}
-#endif
-
 /*
  * context_switch - switch to the new MM and the new thread's register state.
  */
@@ -5343,18 +5299,10 @@ context_switch(struct rq *rq, struct task_struct *prev,
 
 		next->active_mm = prev->active_mm;
 		if (prev->mm) {                           // from user
-#ifdef NACC
-            /* if prev task_struct is nacc process */
-            if (prev->thread.nacc_flag) {
-                /* Send info to the sbi to be verified */
-				nacc_debug("nacc: context_switch from user to kernel\n");
-                nacc_sched_verify((unsigned long) prev->pid, 0);
-            }
-#endif
-            mmgrab_lazy_tlb(prev->active_mm);
-        }
-        else
+			mmgrab_lazy_tlb(prev->active_mm);
+		} else {
 			prev->active_mm = NULL;
+		}
 	} else {                                        // to user
 		membarrier_switch_mm(rq, prev->active_mm, next->mm);
 		/*
@@ -5372,30 +5320,8 @@ context_switch(struct rq *rq, struct task_struct *prev,
 			/* will mmdrop_lazy_tlb() in finish_task_switch(). */
 			rq->prev_mm = prev->active_mm;
 			prev->active_mm = NULL;
-#ifdef NACC
-            /* if next task_struct is nacc process */
-            if (next->thread.nacc_flag) {
-                /* Send info to the sbi to be verified */
-                nacc_sched_verify(0, (unsigned long) next->pid);
-            }
-#endif
-        } else {
-#ifdef NACC
-            /* if next task_struct is nacc process */
-            if (next->thread.nacc_flag && prev->thread.nacc_flag) {
-                /* Send info to the sbi to be verified */
-                nacc_sched_verify((unsigned long) prev->pid,
-                                  (unsigned long) next->pid);
-            } else if (next->thread.nacc_flag) {
-                /* Send info to the sbi to be verified */
-                nacc_sched_verify(0, (unsigned long) next->pid);
-            } else if (prev->thread.nacc_flag) {
-                /* Send info to the sbi to be verified */
-                nacc_sched_verify((unsigned long) prev->pid, 0);
-            }
-#endif
-        }
-    }
+		}
+	}
 
 	/* switch_mm_cid() requires the memory barriers above. */
 	switch_mm_cid(rq, prev, next);

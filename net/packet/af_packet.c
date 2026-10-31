@@ -80,7 +80,7 @@
 #include <linux/seq_file.h>
 #include <linux/poll.h>
 #include <linux/module.h>
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_ptp.h>
 #include <asm/ptrace.h>
 #endif
@@ -3887,7 +3887,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, sockptr_t optval,
 
 		ret = -EINVAL;
 		lock_sock(sk);
-#ifdef NACC
+#ifdef NACRE
 		if (optname == PACKET_RX_RING && current->mm &&
 		    nacre_mm_private(current->mm)) {
 			unsigned long width = po->tp_version == TPACKET_V1 ||
@@ -3928,7 +3928,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, sockptr_t optval,
 		if (!ret)
 			ret = packet_set_ring(sk, &req_u, 0,
 					      optname == PACKET_TX_RING);
-#ifdef NACC
+#ifdef NACRE
 out_ring:
 #endif
 		release_sock(sk);

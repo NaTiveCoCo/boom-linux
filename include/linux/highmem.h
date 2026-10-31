@@ -14,7 +14,7 @@
 #include "highmem-internal.h"
 
 #ifdef CONFIG_RISCV
-bool nacc_copy_mc_user_highpage_sbi(struct page *to, struct page *from,
+bool nacre_copy_mc_user_highpage_sbi(struct page *to, struct page *from,
 				    unsigned long vaddr,
 				    struct vm_area_struct *vma);
 #endif
@@ -351,7 +351,7 @@ static inline int copy_mc_user_highpage(struct page *to, struct page *from,
 	char *vfrom, *vto;
 
 #ifdef CONFIG_RISCV
-	if (nacc_copy_mc_user_highpage_sbi(to, from, vaddr, vma)) {
+	if (nacre_copy_mc_user_highpage_sbi(to, from, vaddr, vma)) {
 		kmsan_unpoison_memory(page_address(to), PAGE_SIZE);
 		return 0;
 	}
@@ -394,7 +394,7 @@ static inline int copy_mc_user_highpage(struct page *to, struct page *from,
 					unsigned long vaddr, struct vm_area_struct *vma)
 {
 #ifdef CONFIG_RISCV
-	if (nacc_copy_mc_user_highpage_sbi(to, from, vaddr, vma)) {
+	if (nacre_copy_mc_user_highpage_sbi(to, from, vaddr, vma)) {
 		kmsan_unpoison_memory(page_address(to), PAGE_SIZE);
 		return 0;
 	}

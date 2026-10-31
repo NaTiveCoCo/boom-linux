@@ -53,7 +53,7 @@
 #include <asm/tlb.h>
 #include <asm/mmu_context.h>
 
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 
 #define CREATE_TRACE_POINTS
@@ -65,7 +65,7 @@
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
 
-static bool nacc_should_mark_private_anon_vma(struct mm_struct *mm,
+static bool nacre_should_mark_private_anon_vma(struct mm_struct *mm,
 		struct file *file, vm_flags_t vm_flags, unsigned long start,
 		unsigned long end)
 {
@@ -81,7 +81,7 @@ static bool nacc_should_mark_private_anon_vma(struct mm_struct *mm,
 		return false;
 
 	protected_end = min_t(unsigned long, TASK_SIZE,
-			      NACC_USER_VPN2_PROTECTED_END);
+			      NACRE_USER_VPN2_PROTECTED_END);
 	return start < protected_end;
 }
 
@@ -811,7 +811,7 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 }
 
 unsigned long
-nacc_get_unmapped_area_aligned(struct file *filp, unsigned long addr,
+nacre_get_unmapped_area_aligned(struct file *filp, unsigned long addr,
 			  unsigned long len, unsigned long pgoff,
 			  unsigned long flags, vm_flags_t vm_flags)
 {
@@ -1425,8 +1425,8 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 	int error;
 	VMA_ITERATOR(vmi, mm, addr);
 
-	if (nacc_should_mark_private_anon_vma(mm, file, vm_flags, addr, end))
-		vm_flags |= VM_NACC_APP;
+	if (nacre_should_mark_private_anon_vma(mm, file, vm_flags, addr, end))
+		vm_flags |= VM_NACRE_APP;
 
 	VMG_STATE(vmg, mm, &vmi, addr, end, vm_flags, pgoff);
 
@@ -1841,8 +1841,8 @@ static int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	 * Note: This happens *after* clearing old mappings in some code paths.
 	 */
 	flags |= VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
-	if (nacc_should_mark_private_anon_vma(mm, NULL, flags, addr, addr + len))
-		flags |= VM_NACC_APP;
+	if (nacre_should_mark_private_anon_vma(mm, NULL, flags, addr, addr + len))
+		flags |= VM_NACRE_APP;
 
 	if (!may_expand_vm(mm, flags, len >> PAGE_SHIFT))
 		return -ENOMEM;
@@ -1954,16 +1954,6 @@ EXPORT_SYMBOL(vm_brk_flags);
 /* Release all mmaps. */
 void exit_mmap(struct mm_struct *mm)
 {
-    if (nacc_mm_is_active(mm)) {
-        pgtbl_debug(virt_to_phys(mm->pgd));
-    }
-
-    if (unlikely(current->thread.nacc_flag || nacc_mm_state(mm))) {
-        nacc_debug("[Linux]: exit_mmap pid=%d nacc_flag=%lx mm_state=%lx mm=%px pgd=%px\n",
-                   current->pid, current->thread.nacc_flag,
-                   nacc_mm_state(mm), mm, mm->pgd);
-    }
-
 	struct mmu_gather tlb;
 	struct vm_area_struct *vma;
 	unsigned long nr_accounted = 0;
@@ -1990,10 +1980,6 @@ void exit_mmap(struct mm_struct *mm)
 	/* update_hiwater_rss(mm) here? but nobody should be looking */
 	/* Use ULONG_MAX here to ensure all VMAs in the mm are unmapped */
 	unmap_vmas(&tlb, &vmi.mas, vma, 0, ULONG_MAX, ULONG_MAX, false);
-    if (nacc_mm_is_active(mm)) {
-        nacc_debug("[Linux] after unmap_vmas \n");
-        pgtbl_debug(virt_to_phys(mm->pgd));
-    }
 	mmap_read_unlock(mm);
 
 	/*
@@ -2006,9 +1992,6 @@ void exit_mmap(struct mm_struct *mm)
 	vma_iter_set(&vmi, vma->vm_end);
 	free_pgtables(&tlb, &vmi.mas, vma, FIRST_USER_ADDRESS,
 		      USER_PGTABLES_CEILING, true);
-    if (nacc_mm_is_active(mm)) {
-        pgtbl_debug(virt_to_phys(mm->pgd));
-    }
     tlb_finish_mmu(&tlb);
 
 	/*

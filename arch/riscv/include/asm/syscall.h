@@ -100,8 +100,8 @@ asmlinkage long sys_riscv_flush_icache(uintptr_t, uintptr_t, uintptr_t);
 asmlinkage long sys_riscv_hwprobe(struct riscv_hwprobe *, size_t, size_t,
 				  unsigned long *, unsigned int);
 
-asmlinkage long sys_nacc_invoke(unsigned long cid);
+asmlinkage long sys_nacre_invoke(unsigned long cid);
 
-asmlinkage long sys_nacc_loop_test(uintptr_t);
+asmlinkage long sys_nacre_loop_test(uintptr_t);
 
 #endif	/* _ASM_RISCV_SYSCALL_H */

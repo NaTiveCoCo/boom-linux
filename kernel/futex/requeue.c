@@ -4,7 +4,7 @@
 #include <linux/sched/signal.h>
 
 #include "futex.h"
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_registration.h>
 #endif
 #include "../locking/rtmutex_common.h"
@@ -454,7 +454,7 @@ retry_private:
 	double_lock_hb(hb1, hb2);
 
 	if (likely(cmpval != NULL)) {
-#ifdef NACC
+#ifdef NACRE
 		if (current->thread.nacre_flag == NACRE_HANDOFF) {
 			/* Reuse the authorized single-word comparison under both native locks. */
 			BUG_ON(requeue_pi);

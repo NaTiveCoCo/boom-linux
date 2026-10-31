@@ -4,7 +4,7 @@
 #include <linux/mm.h>
 #include <linux/ptrace.h>
 #include <linux/sched.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_ptp.h>
 #include <asm/sbi.h>
@@ -27,8 +27,8 @@ int nacre_fork_mm_prepare(struct mm_struct *mm)
     VMA_ITERATOR(vmi, mm, 0);
     mmap_write_lock(mm);
     for_each_vma(vmi, vma) {
-        if (!nacc_vma_is_vdso_text(vma)) continue;
-        rc = nacc_adopt_vdso_text(vma);
+        if (!nacre_vma_is_vdso_text(vma)) continue;
+        rc = nacre_adopt_vdso_text(vma);
         break;
     }
     mmap_write_unlock(mm);

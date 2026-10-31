@@ -35,7 +35,7 @@
 #include <linux/syscall_user_dispatch.h>
 
 #include <asm/syscall.h>	/* for syscall_get_* */
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_ptp.h>
 #endif
 
@@ -462,7 +462,7 @@ static int ptrace_attach(struct task_struct *task, long request,
 			if (task->ptrace)
 				return -EPERM;
 
-#ifdef NACC
+#ifdef NACRE
 			/* Preserve native lookup/permission errors; never establish tracing. */
 			if (current->mm && nacre_mm_private(current->mm))
 				return -EOPNOTSUPP;

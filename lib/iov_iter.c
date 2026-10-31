@@ -13,16 +13,16 @@
 #include <linux/instrumented.h>
 #include <linux/iov_iter.h>
 
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 #include <linux/instruction_pointer.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #endif
 
 /* A private page held by an async/foreign-mm caller has no current-root authority. */
 static inline bool nacre_page_copy_allowed(struct page *page)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
-	return !PageNacre(page) || nacc_private_data_uaccess_active();
+#if defined(CONFIG_RISCV) && defined(NACRE)
+	return !PageNacre(page) || nacre_private_data_uaccess_active();
 #else
 	return true;
 #endif
@@ -77,12 +77,12 @@ static __always_inline
 size_t memcpy_to_iter(void *iter_to, size_t progress,
 		      size_t len, void *from, void *priv2)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
-	if (nacc_private_data_uaccess_active()) {
+#if defined(CONFIG_RISCV) && defined(NACRE)
+	if (nacre_private_data_uaccess_active()) {
 		size_t left = len;
 		int ret;
 
-		ret = nacc_private_data_copy_kernel_alias(
+		ret = nacre_private_data_copy_kernel_alias(
 			(unsigned long)iter_to,
 			(unsigned long)((char *)from + progress), len,
 			_RET_IP_, &left);
@@ -100,10 +100,10 @@ static __always_inline
 size_t memcpy_from_iter(void *iter_from, size_t progress,
 			size_t len, void *to, void *priv2)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
-	if (nacc_private_data_uaccess_active()) {
+#if defined(CONFIG_RISCV) && defined(NACRE)
+	if (nacre_private_data_uaccess_active()) {
 		size_t left = len;
-		int ret = nacc_private_data_copy_kernel_alias(
+		int ret = nacre_private_data_copy_kernel_alias(
 			(unsigned long)(to + progress), (unsigned long)iter_from,
 			len, _RET_IP_, &left);
 		if (ret)
@@ -486,13 +486,13 @@ static __always_inline
 size_t zero_to_iter(void *iter_to, size_t progress,
 		    size_t len, void *priv, void *priv2)
 {
-#if defined(CONFIG_RISCV) && defined(NACC)
+#if defined(CONFIG_RISCV) && defined(NACRE)
 	static const char zero[PAGE_SIZE] __aligned(PAGE_SIZE);
 	size_t done = 0;
-	if (nacc_private_data_uaccess_active()) {
+	if (nacre_private_data_uaccess_active()) {
 		while (done < len) {
 			size_t chunk = min_t(size_t, len - done, PAGE_SIZE), left = chunk;
-			int ret = nacc_private_data_copy_kernel_alias(
+			int ret = nacre_private_data_copy_kernel_alias(
 				(unsigned long)iter_to + done, (unsigned long)zero,
 				chunk, _RET_IP_, &left);
 			if (ret < 0)

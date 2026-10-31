@@ -3,12 +3,9 @@
 #include <linux/entry-common.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_signal_abi.h>
-
-long nacre_signal_frame_export(struct ksignal *, sigset_t *, unsigned long,
-                               unsigned long, struct pt_regs *);
-long nacre_signal_frame_restore(unsigned long, struct pt_regs *);
 
 /* Exists only between selection and publication, never throughout a handler. */
 struct nacre_signal_state {

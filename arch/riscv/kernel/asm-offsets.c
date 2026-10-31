@@ -84,8 +84,6 @@ void asm_offsets(void)
 	OFFSET(TASK_THREAD_F31, task_struct, thread.fstate.f[31]);
 	OFFSET(TASK_THREAD_FCSR, task_struct, thread.fstate.fcsr);
 
-    /* Nacc flag */
-    OFFSET(TASK_THREAD_NACC_FLAG, task_struct, thread.nacc_flag);
 	OFFSET(TASK_THREAD_NACRE_FLAG, task_struct, thread.nacre_flag);
 	OFFSET(TASK_THREAD_NACRE_CID, task_struct, thread.nacre_cid);
 	OFFSET(TASK_THREAD_NACRE_ENTRY, task_struct, thread.nacre_entry);

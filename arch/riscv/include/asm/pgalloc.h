@@ -9,7 +9,7 @@
 
 #include <linux/mm.h>
 #include <asm/sbi.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_ptp.h>
 #include <asm/tlb.h>
 
@@ -171,44 +171,22 @@ static inline void sync_kernel_mappings(pgd_t *pgd)
 static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *pgd;
-	unsigned long cid;
 
 	pgd = (pgd_t *)__get_free_page(GFP_KERNEL);
 	if (likely(pgd != NULL)) {
 		memset(pgd, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
 		/* Copy kernel mappings */
 		sync_kernel_mappings(pgd);
-
-		if (mm && nacc_thread_has_root_l0_lifecycle()) {
-			cid = current->thread.nacc_cid;
-			if (!cid ||
-			    (nacc_mm_is_active(mm) ?
-			     nacc_fork_select_child_root_sbi(virt_to_phys(pgd)) :
-			     nacc_tag_root_sbi(virt_to_phys(pgd), cid))) {
-				free_page((unsigned long)pgd);
-				return NULL;
-			}
-			nacc_mm_set_state(mm, NACC_MM_ROOT_TAGGED);
-		}
 	}
 	return pgd;
 }
 
 static inline void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 {
-	/*
-	 * Keep ROOT_L0 enforcement active through exit_mmap() and retire the tag
-	 * only when the root page is about to be physically freed after the last
-	 * mm reference is gone. Retire any PGD that entered the ROOT_L0 lifecycle,
-	 * including an exec mm that was tagged during pgd_alloc() before later
-	 * setup finished.
-	 */
-	if (mm && pgd && nacc_mm_root_tagged(mm))
-		nacc_retire_root_sbi(virt_to_phys(pgd));
 	if (mm && mm->context.nacre_prepared)
 		nacre_root_retire(mm);
-    else if (nacre_mm_managed(mm))
-        nacre_mm_discard(mm);
+	else if (nacre_mm_managed(mm))
+		nacre_mm_discard(mm);
 	pagetable_free(virt_to_ptdesc(pgd));
 }
 

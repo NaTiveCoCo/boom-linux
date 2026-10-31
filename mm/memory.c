@@ -93,7 +93,7 @@
 #include "internal.h"
 #include "swap.h"
 
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/sbi.h>
 
@@ -188,21 +188,6 @@ void mm_trace_rss_stat(struct mm_struct *mm, int member)
 	trace_rss_stat(mm, member);
 }
 
-/* Legacy Agent subtree teardown; NACRE user PTPs synchronize in UNLINK. */
-static void nacc_mark_agent_slot_unlinked(struct mmu_gather *tlb,
-					unsigned long addr)
-{
-	tlb_flush_pud_range(tlb, addr, PAGE_SIZE);
-	tlb->freed_tables = 1;
-}
-
-static void nacc_force_agent_gather_drain(struct mmu_gather *tlb,
-					unsigned long addr)
-{
-	nacc_mark_agent_slot_unlinked(tlb, addr);
-	tlb_flush_mmu_tlbonly(tlb);
-}
-
 /*
  * Note: this doesn't free the actual pages themselves. That
  * has been handled earlier when unmapping all the memory regions.
@@ -267,18 +252,12 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 
 	start = addr;
 	pud = pud_offset(p4d, addr);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: before free pmd range\n");
-	// }
 	do {
 		next = pud_addr_end(addr, end);
 		if (pud_none_or_clear_bad(pud))
 			continue;
 		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
 	} while (pud++, addr = next, addr != end);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: after free pmd range\n");
-	// }
 	start &= P4D_MASK;
 	if (start < floor)
 		return;
@@ -306,19 +285,12 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 
 	start = addr;
 	p4d = p4d_offset(pgd, addr);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: before free pud_range\n");
-	// }
 	do {
 		next = p4d_addr_end(addr, end);
 		if (p4d_none_or_clear_bad(p4d))
 			continue;
 		free_pud_range(tlb, p4d, addr, next, floor, ceiling);
 	} while (p4d++, addr = next, addr != end);
-
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "[Linux]: After free pud_range\n");
-	// }
 	start &= PGDIR_MASK;
 	if (start < floor)
 		return;
@@ -538,7 +510,7 @@ static inline void add_mm_rss_vec(struct mm_struct *mm, int *rss)
 			add_mm_counter(mm, i, rss[i]);
 }
 
-static struct page *nacc_private_leaf_page(struct mm_struct *mm,
+static struct page *nacre_private_leaf_page(struct mm_struct *mm,
 		struct vm_area_struct *vma, unsigned long addr, pte_t ptent,
 		unsigned long *pfn_out);
 
@@ -650,7 +622,7 @@ struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 {
 	unsigned long pfn = pte_pfn(pte);
 
-	if (unlikely(nacc_private_leaf_page(vma->vm_mm, vma, addr, pte, NULL)))
+	if (unlikely(nacre_private_leaf_page(vma->vm_mm, vma, addr, pte, NULL)))
 		return NULL;
 
 	if (IS_ENABLED(CONFIG_ARCH_HAS_PTE_SPECIAL)) {
@@ -994,7 +966,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		/* Uffd-wp needs to be delivered to dest pte as well */
 		pte = pte_mkuffd_wp(pte);
 	/* Protected application pages must use fork COW sharing. */
-	BUG_ON(pte_nacc(src_ptent));
+	BUG_ON(pte_nacre(src_ptent));
 
 	if (copy_mc_user_highpage(&new_folio->page, page, addr, src_vma))
 		return -EHWPOISON;
@@ -1052,10 +1024,10 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	page = vm_normal_page(src_vma, addr, pte);
 
 	if (unlikely(!page)) {
-		unsigned long nacc_pfn;
+		unsigned long nacre_pfn;
 
-		page = nacc_private_leaf_page(src_vma->vm_mm, src_vma,
-					      addr, pte, &nacc_pfn);
+		page = nacre_private_leaf_page(src_vma->vm_mm, src_vma,
+					      addr, pte, &nacre_pfn);
 		if (!page)
 			goto copy_pte;
 	}
@@ -1106,7 +1078,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		if (unlikely(folio_try_dup_anon_rmap_pte(folio, page, src_vma))) {
 			/* Protected application pages cannot enter the pinned eager-copy path. */
 			folio_put(folio);
-			if (pte_nacc(pte))
+			if (pte_nacre(pte))
 				return -EBUSY;
 			/* Page may be pinned, we have to copy. */
 			err = copy_present_page(dst_vma, src_vma, dst_pte, src_pte,
@@ -1410,19 +1382,19 @@ vma_needs_copy(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 		return true;
 
 	/*
-	 * NaCC VDSO/VVAR semantic records are keyed by root; do not inherit
+	 * NACRE VDSO/VVAR semantic records are keyed by root; do not inherit
 	 * present mappings into a child root. Let the child fault and register
 	 * the mapping against its own secure page-table root.
 	 */
-	if ((nacc_vma_is_vdso_text(src_vma) ||
-	     nacc_vma_is_vvar_abi_data(src_vma)) &&
-	    (nacre_mm_private(src_vma->vm_mm) || nacre_mm_private(dst_vma->vm_mm) ||
-         nacc_use_secure_pt(src_vma->vm_mm) ||
-	     nacc_use_secure_pt(dst_vma->vm_mm)))
+	if ((nacre_vma_is_vdso_text(src_vma) ||
+	     nacre_vma_is_vvar_abi_data(src_vma)) &&
+	    (nacre_mm_private(src_vma->vm_mm) ||
+	     nacre_mm_private(dst_vma->vm_mm)))
 		return false;
 
-    if (nacre_mm_private(src_vma->vm_mm) && (src_vma->vm_flags & VM_NACC_APP))
-        return true;
+	if (nacre_mm_private(src_vma->vm_mm) &&
+	    (src_vma->vm_flags & VM_NACRE_APP))
+		return true;
 
 	if (src_vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return true;
@@ -1615,22 +1587,22 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 	}
 }
 
-static bool nacc_addr_in_protected_user_leaf_range(unsigned long addr)
+static bool nacre_addr_in_protected_user_leaf_range(unsigned long addr)
 {
 	unsigned long end;
 
-	end = min_t(unsigned long, TASK_SIZE, NACC_USER_VPN2_PROTECTED_END);
+	end = min_t(unsigned long, TASK_SIZE, NACRE_USER_VPN2_PROTECTED_END);
 	return addr < end;
 }
 
-static bool nacc_should_install_private_leaf(struct vm_area_struct *vma,
+static bool nacre_should_install_private_leaf(struct vm_area_struct *vma,
 					     unsigned long addr)
 {
 	if (!vma || !vma->vm_mm)
 		return false;
 	if (!nacre_mm_private(vma->vm_mm))
 		return false;
-	if (!nacc_addr_in_protected_user_leaf_range(addr))
+	if (!nacre_addr_in_protected_user_leaf_range(addr))
 		return false;
 	if (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return false;
@@ -1638,7 +1610,7 @@ static bool nacc_should_install_private_leaf(struct vm_area_struct *vma,
 		return false;
 	/*
 	 * Private /dev/zero keeps vm_file after mmap_zero(), but vm_ops is
-	 * cleared and the VMA is a zero-source anonymous mapping for NaCC.
+	 * cleared and the VMA is a zero-source anonymous mapping for NACRE.
 	 */
 	if (vma->vm_file && !vma_is_anonymous(vma))
 		return false;
@@ -1646,7 +1618,7 @@ static bool nacc_should_install_private_leaf(struct vm_area_struct *vma,
 	return true;
 }
 
-static bool nacc_should_import_file_leaf(struct vm_area_struct *vma,
+static bool nacre_should_import_file_leaf(struct vm_area_struct *vma,
 					 unsigned long addr,
 					 bool is_cow,
 					 unsigned int nr_pages)
@@ -1657,13 +1629,13 @@ static bool nacc_should_import_file_leaf(struct vm_area_struct *vma,
 		return false;
 	if (!nacre_mm_private(vma->vm_mm))
 		return false;
-	if (!nacc_addr_in_protected_user_leaf_range(addr))
+	if (!nacre_addr_in_protected_user_leaf_range(addr))
 		return false;
 	/*
 	 * Import all ordinary MAP_PRIVATE file leaves, including VMAs created
 	 * after exec that do not carry the construction bookkeeping marker.
 	 */
-	if (vma->vm_flags & (VM_NACC | VM_PFNMAP | VM_MIXEDMAP |
+	if (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP |
 			     VM_SHARED | VM_MAYSHARE))
 		return false;
 	if (!vma->vm_file || vma_is_anonymous(vma))
@@ -1674,7 +1646,7 @@ static bool nacc_should_import_file_leaf(struct vm_area_struct *vma,
 	return true;
 }
 
-static bool nacc_remote_vm_has_private_pte(struct mm_struct *mm,
+static bool nacre_remote_vm_has_private_pte(struct mm_struct *mm,
 					   struct vm_area_struct *vma,
 					   unsigned long addr)
 {
@@ -1690,7 +1662,7 @@ static bool nacc_remote_vm_has_private_pte(struct mm_struct *mm,
 	pte_t pte;
 	bool private = false;
 
-	if (!nacre_mm_private(mm) || !nacc_addr_in_protected_user_leaf_range(addr))
+	if (!nacre_mm_private(mm) || !nacre_addr_in_protected_user_leaf_range(addr))
 		return false;
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return false;
@@ -1723,13 +1695,13 @@ static bool nacc_remote_vm_has_private_pte(struct mm_struct *mm,
 	if (!ptep)
 		return false;
 	pte = ptep_get(ptep);
-	private = !!nacc_private_leaf_page(mm, vma, addr, pte, NULL);
+	private = !!nacre_private_leaf_page(mm, vma, addr, pte, NULL);
 	pte_unmap_unlock(ptep, ptl);
 
 	return private;
 }
 
-static int nacc_access_remote_vm_private_copy(struct mm_struct *mm,
+static int nacre_access_remote_vm_private_copy(struct mm_struct *mm,
 					      struct vm_area_struct *vma,
 					      unsigned long addr,
 					      void *buf, int bytes,
@@ -1737,18 +1709,18 @@ static int nacc_access_remote_vm_private_copy(struct mm_struct *mm,
 {
 	unsigned long left;
 
-	if (!nacc_remote_vm_has_private_pte(mm, vma, addr))
+	if (!nacre_remote_vm_has_private_pte(mm, vma, addr))
 		return -EOPNOTSUPP;
 
 	if (mm != current->mm) {
-		printk_ratelimited(KERN_ERR "[NACC][remote-vm-private-denied] pid=%d comm=%s target_mm=%px current_mm=%px addr=%lx bytes=%d direction=%s\n",
+		printk_ratelimited(KERN_ERR "[NACRE][remote-vm-private-denied] pid=%d comm=%s target_mm=%px current_mm=%px addr=%lx bytes=%d direction=%s\n",
 				   current->pid, current->comm, mm,
 				   current->mm, addr, bytes,
 				   write ? "to_remote" : "from_remote");
 		return 0;
 	}
-	if (!nacc_private_data_uaccess_active()) {
-		printk_ratelimited(KERN_ERR "[NACC][remote-vm-private-current-denied] pid=%d comm=%s mm=%px addr=%lx bytes=%d direction=%s\n",
+	if (!nacre_private_data_uaccess_active()) {
+		printk_ratelimited(KERN_ERR "[NACRE][remote-vm-private-current-denied] pid=%d comm=%s mm=%px addr=%lx bytes=%d direction=%s\n",
 				   current->pid, current->comm, mm, addr,
 				   bytes, write ? "to_current" : "from_current");
 		return 0;
@@ -1760,7 +1732,7 @@ static int nacc_access_remote_vm_private_copy(struct mm_struct *mm,
 		left = copy_from_user(buf, (const void __user *)addr, bytes);
 
 	if (left == bytes) {
-		printk_ratelimited(KERN_ERR "[NACC][remote-vm-private-current-failed] pid=%d comm=%s mm=%px addr=%lx bytes=%d direction=%s\n",
+		printk_ratelimited(KERN_ERR "[NACRE][remote-vm-private-current-failed] pid=%d comm=%s mm=%px addr=%lx bytes=%d direction=%s\n",
 				   current->pid, current->comm, mm, addr,
 				   bytes, write ? "to_current" : "from_current");
 		return 0;
@@ -1769,7 +1741,7 @@ static int nacc_access_remote_vm_private_copy(struct mm_struct *mm,
 	return bytes - left;
 }
 
-static struct page *nacc_private_leaf_page(struct mm_struct *mm,
+static struct page *nacre_private_leaf_page(struct mm_struct *mm,
 		struct vm_area_struct *vma, unsigned long addr, pte_t ptent,
 		unsigned long *pfn_out)
 {
@@ -1777,9 +1749,9 @@ static struct page *nacc_private_leaf_page(struct mm_struct *mm,
 
 	if (!nacre_mm_private(mm))
 		return NULL;
-	if (!nacc_addr_in_protected_user_leaf_range(addr))
+	if (!nacre_addr_in_protected_user_leaf_range(addr))
 		return NULL;
-	if (!pte_present(ptent) || !pte_nacc(ptent))
+	if (!pte_present(ptent) || !pte_nacre(ptent))
 		return NULL;
 
 	pfn = pte_pfn(ptent);
@@ -1792,12 +1764,12 @@ static struct page *nacc_private_leaf_page(struct mm_struct *mm,
 	return pfn_to_page(pfn);
 }
 
-#ifdef NACC
+#ifdef NACRE
 /* Reuse the same leaf identity checks as private COW and retirement. */
 struct page *nacre_private_page_metadata(struct vm_area_struct *vma,
 				       unsigned long addr, pte_t pte)
 {
-	return nacc_private_leaf_page(vma->vm_mm, vma, addr, pte, NULL);
+	return nacre_private_leaf_page(vma->vm_mm, vma, addr, pte, NULL);
 }
 #endif
 
@@ -1813,22 +1785,17 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 		struct zap_details *details, int *rss, bool *force_flush,
 		bool *force_break)
 {
-	// if(current->thread.nacc_flag) {
-	// 	printk(KERN_ERR "zap_present_ptes: before vm_normal_page\n");
-	// 	printk(KERN_ERR "  pte_addr: %lx pte: %lx pfn: %lx ptent: %lx\n", (unsigned long) pte, pte_val(*pte), __page_val_to_pfn(pte_val(*pte)), pte_val(ptent));
-	// 	printk(KERN_ERR "  max_nr: %d addr: %lx\n", max_nr, addr);
-	// }
 	const fpb_t fpb_flags = FPB_IGNORE_DIRTY | FPB_IGNORE_SOFT_DIRTY;
 	struct mm_struct *mm = tlb->mm;
 	struct folio *folio;
 	struct page *page;
-	unsigned long nacc_pfn;
+	unsigned long nacre_pfn;
 	int nr;
 
 	page = vm_normal_page(vma, addr, ptent);
 	if (!page) {
-		page = nacc_private_leaf_page(mm, vma, addr, ptent,
-					      &nacc_pfn);
+		page = nacre_private_leaf_page(mm, vma, addr, ptent,
+					      &nacre_pfn);
 		if (page) {
 			folio = page_folio(page);
 			if (unlikely(!should_zap_folio(details, folio)))
@@ -1853,9 +1820,6 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 		ksm_might_unmap_zero_page(mm, ptent);
 		return 1;
 	}
-	// if(current->thread.nacc_flag) {
-	// 	printk(KERN_ERR "zap_present_ptes: vm_normal_page page: %lx\n", page_to_pfn(page));
-	// }
 	folio = page_folio(page);
 	if (unlikely(!should_zap_folio(details, folio)))
 		return 1;
@@ -1873,15 +1837,8 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 				       force_break);
 		return nr;
 	}
-	// if(current->thread.nacc_flag) {
-	// 	printk(KERN_ERR "zap_present_ptes: before zap_present_folio_ptes\n");
-	// }
-
 	zap_present_folio_ptes(tlb, vma, folio, page, pte, ptent, 1, addr,
 			       details, rss, force_flush, force_break);
-	// if(current->thread.nacc_flag) {
-	// 	printk(KERN_ERR "zap_present_ptes: done\n");
-	// }
 	return 1;
 }
 
@@ -1902,8 +1859,8 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	tlb_change_page_size(tlb, PAGE_SIZE);
 	init_rss_vec(rss);
 	if (nacre_mm_private(mm)) {
-		nacc_debug("zap_pte_range: start\n");
-        nacc_debug("addr: %lx end: %lx\n", addr, end);
+		nacre_debug("zap_pte_range: start\n");
+        nacre_debug("addr: %lx end: %lx\n", addr, end);
     }
     start_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
@@ -2007,8 +1964,6 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	if (force_flush)
 		tlb_flush_mmu(tlb);
 
-	if (nacre_mm_private(mm))
-		nacc_debug("zap_pte_range: end\n");
 	return addr;
 }
 
@@ -2021,10 +1976,6 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 	unsigned long next;
 
 	pmd = pmd_offset(pud, addr);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_pmd_range: Before zap_pte_range\n");
-	// 	printk(KERN_ERR "*pud pfn: %lx *pmd pfn: %lx pmd pointer: %lx\n", __page_val_to_pfn(pud_val(*pud)), __page_val_to_pfn(pmd_val(*pmd)), (unsigned long)pmd);
-    // }
 	do {
 		next = pmd_addr_end(addr, end);
 		if (is_swap_pmd(*pmd) || pmd_trans_huge(*pmd) || pmd_devmap(*pmd)) {
@@ -2054,10 +2005,6 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 		if (addr != next)
 			pmd--;
 	} while (pmd++, cond_resched(), addr != end);
-
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_pmd_range: end\n");
-	// }
 	return addr;
 }
 
@@ -2070,11 +2017,6 @@ static inline unsigned long zap_pud_range(struct mmu_gather *tlb,
 	unsigned long next;
 
 	pud = pud_offset(p4d, addr);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_pud_range: Before zap_pmd_range\n");
-	// 	printk(KERN_ERR "p4d pfn: %lx pud pfn: %lx\n", __page_val_to_pfn(p4d_val(*p4d)), __page_val_to_pfn(pud_val(*pud)));
-	// }
-
 	do {
 		next = pud_addr_end(addr, end);
 		if (pud_trans_huge(*pud) || pud_devmap(*pud)) {
@@ -2091,10 +2033,6 @@ static inline unsigned long zap_pud_range(struct mmu_gather *tlb,
 next:
 		cond_resched();
 	} while (pud++, addr = next, addr != end);
-	
-    // if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_pud_range: end\n");
-	// }
 	return addr;
 }
 
@@ -2107,19 +2045,12 @@ static inline unsigned long zap_p4d_range(struct mmu_gather *tlb,
 	unsigned long next;
 
 	p4d = p4d_offset(pgd, addr);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_p4d_range: Before zap_pud_range\n");
-	// 	printk(KERN_ERR "pgd pfn: %lx p4d pfn: %lx\n", __page_val_to_pfn(pgd_val(*pgd)), __page_val_to_pfn(p4d_val(*p4d)));
-	// }
 	do {
 		next = p4d_addr_end(addr, end);
 		if (p4d_none_or_clear_bad(p4d))
 			continue;
 		next = zap_pud_range(tlb, vma, p4d, addr, next, details);
 	} while (p4d++, addr = next, addr != end);
-	// if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "zap_p4d_range: end\n");
-	// }
 	return addr;
 }
 
@@ -2130,62 +2061,27 @@ void unmap_page_range(struct mmu_gather *tlb,
 {
 	pgd_t *pgd;
 	unsigned long next;
-	bool hit_nacc_reclaim;
 
 	BUG_ON(addr >= end);
 	tlb_start_vma(tlb, vma);
 	pgd = pgd_offset(vma->vm_mm, addr);
-	hit_nacc_reclaim = !!(nacc_mm_root_tagged(vma->vm_mm) &&
-			       (vma->vm_flags & VM_NACC));
-	if (unlikely(current->thread.nacc_flag || nacc_mm_state(vma->vm_mm) ||
-		     (vma->vm_flags & VM_NACC))) {
-		nacc_debug("[Linux]: unmap_page_range pid=%d nacc_flag=%lx mm_state=%lx vma=[%lx,%lx) vm_flags=%lx addr=%lx end=%lx hit_nacc_reclaim=%d\n",
-			   current->pid, current->thread.nacc_flag,
-			   nacc_mm_state(vma->vm_mm),
-			   vma->vm_start, vma->vm_end, vma->vm_flags,
-			   addr, end, hit_nacc_reclaim);
-	}
-	if (hit_nacc_reclaim) {
-		int ret;
-		unsigned int retries = 0;
+	do {
+		next = pgd_addr_end(addr, end);
+		if (nacre_agent_slot(vma->vm_mm, addr))
+			continue;
+		if (vma->vm_mm->context.nacre_prepared) {
+			pud_t entry = __pud(nacre_root_entry(vma->vm_mm, addr));
 
-		nacc_debug("  VM_NACC is set for [%lx, %lx] region, we should reclaim it in the monitor. \n",
-			   vma->vm_start, vma->vm_end);
-		pgtbl_debug(virt_to_phys(tlb->mm->pgd));
-		do {
-			ret = nacc_detach_agent_slot_sbi(
-				virt_to_phys(tlb->mm->pgd));
-			if (ret != -EAGAIN)
-				break;
-			if (retries++ == 16)
-				break;
-			nacc_force_agent_gather_drain(tlb, addr);
-		} while (1);
-		if (ret)
-			panic("NaCC Agent detach group stayed busy after gather drain retries");
-		nacc_mark_agent_slot_unlinked(tlb, addr);
-	} else {
-		do {
-			next = pgd_addr_end(addr, end);
-			if (nacre_agent_slot(vma->vm_mm, addr))
-				continue;
-			if (vma->vm_mm->context.nacre_prepared) {
-				pud_t entry = __pud(nacre_root_entry(vma->vm_mm, addr));
-
-				BUG_ON(!pud_none(entry) && pud_bad(entry));
-				if (!pud_none(entry))
-					next = zap_pmd_range(tlb, vma, &entry, addr, next, details);
-				continue;
-			}
-			if (pgd_none_or_clear_bad(pgd))
-				continue;
-			next = zap_p4d_range(tlb, vma, pgd, addr, next, details);
-		} while (pgd++, addr = next, addr != end);
-	}
-    // if(current->thread.nacc_flag & NACC_RECLAIM) {
-	// 	printk(KERN_ERR "unmap_page_range: Before tlb_end_vma\n");
-	// }
-    tlb_end_vma(tlb, vma);
+			BUG_ON(!pud_none(entry) && pud_bad(entry));
+			if (!pud_none(entry))
+				next = zap_pmd_range(tlb, vma, &entry, addr, next, details);
+			continue;
+		}
+		if (pgd_none_or_clear_bad(pgd))
+			continue;
+		next = zap_p4d_range(tlb, vma, pgd, addr, next, details);
+	} while (pgd++, addr = next, addr != end);
+	tlb_end_vma(tlb, vma);
 }
 
 
@@ -2202,15 +2098,6 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 	end = min(vma->vm_end, end_addr);
 	if (end <= vma->vm_start)
 		return;
-
-	if (unlikely(current->thread.nacc_flag || nacc_mm_state(vma->vm_mm) ||
-		     (vma->vm_flags & VM_NACC))) {
-		nacc_debug("[Linux]: unmap_single_vma pid=%d nacc_flag=%lx mm_state=%lx vma=[%lx,%lx) vm_flags=%lx start=%lx end=%lx vm_nacc=%d\n",
-			   current->pid, current->thread.nacc_flag,
-			   nacc_mm_state(vma->vm_mm),
-			   vma->vm_start, vma->vm_end, vma->vm_flags,
-			   start, end, !!(vma->vm_flags & VM_NACC));
-	}
 
 	if (vma->vm_file)
 		uprobe_munmap(vma, start, end);
@@ -2286,10 +2173,6 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 				 mm_wr_locked);
 		hugetlb_zap_end(vma, &details);
 		vma = mas_find(mas, tree_end - 1);
-        // if (current->thread.nacc_flag & NACC_RECLAIM) {
-        //     printk(KERN_ERR "unmap_vmas: after unmap_single_vma, [%lx, %lx]\n", start, end);
-        //     pgtbl_debug();
-        // }
 	} while (vma && likely(!xa_is_zero(vma)));
 	mmu_notifier_invalidate_range_end(&range);
 }
@@ -2714,7 +2597,7 @@ static vm_fault_t insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 	pte_t *pte, entry;
 	spinlock_t *ptl;
 
-	if (nacre_mm_private(mm) && !nacc_vma_is_vvar_abi_data(vma))
+	if (nacre_mm_private(mm) && !nacre_vma_is_vvar_abi_data(vma))
 		return VM_FAULT_SIGBUS;
 
 	pte = get_locked_pte(mm, addr, &ptl);
@@ -2760,7 +2643,7 @@ static vm_fault_t insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 	if (nacre_mm_private(mm)) {
 		int error;
 		BUG_ON(mkwrite || pte_write(entry) || pte_exec(entry) || pte_devmap(entry));
-		error = nacc_record_vvar_sbi(__pa(mm->pgd), addr, pfn_t_to_pfn(pfn));
+		error = nacre_record_vvar_sbi(__pa(mm->pgd), addr, pfn_t_to_pfn(pfn));
 		if (error) {
 			pte_unmap_unlock(pte, ptl);
 			return error == -ENOMEM ? VM_FAULT_OOM : VM_FAULT_SIGBUS;
@@ -3751,8 +3634,8 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	struct mmu_notifier_range range;
 	vm_fault_t ret;
 	bool pfn_is_zero;
-	bool nacc_new_private;
-	bool nacc_monitor_cow;
+	bool nacre_new_private;
+	bool nacre_monitor_cow;
 
 	delayacct_wpcopy_start();
 
@@ -3763,22 +3646,22 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		goto out;
 
 	pfn_is_zero = is_zero_pfn(pte_pfn(vmf->orig_pte));
-	nacc_monitor_cow = !pfn_is_zero && vmf->page &&
+	nacre_monitor_cow = !pfn_is_zero && vmf->page &&
 			   pte_present(vmf->orig_pte) &&
 			   !pte_special(vmf->orig_pte) &&
 			   !pte_devmap(vmf->orig_pte) &&
 			   !(vma->vm_flags & (VM_SHARED | VM_MAYSHARE |
 					      VM_PFNMAP | VM_MIXEDMAP)) &&
 			   nacre_mm_private(mm);
-	nacc_new_private = nacc_monitor_cow ||
-			   nacc_should_install_private_leaf(vma, vmf->address) ||
+	nacre_new_private = nacre_monitor_cow ||
+			   nacre_should_install_private_leaf(vma, vmf->address) ||
 			   (pte_present(vmf->orig_pte) &&
-			    pte_nacc(vmf->orig_pte));
+			    pte_nacre(vmf->orig_pte));
 	new_folio = folio_prealloc(mm, vma, vmf->address, pfn_is_zero);
 	if (!new_folio)
 		goto oom;
 
-	if (!pfn_is_zero && !nacc_monitor_cow) {
+	if (!pfn_is_zero && !nacre_monitor_cow) {
 		int err;
 
 		err = __wp_page_copy_user(&new_folio->page, vmf->page, vmf);
@@ -3833,7 +3716,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		}
 		flush_cache_page(vma, vmf->address, pte_pfn(vmf->orig_pte));
 
-		if (nacc_monitor_cow) {
+		if (nacre_monitor_cow) {
 			/*
 			 * The Monitor copies a checked source into a fresh
 			 * private destination and commits the mapping. Linux retains
@@ -3843,7 +3726,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			if (pte_nacc(vmf->orig_pte))
+			if (pte_nacre(vmf->orig_pte))
 				nacre_private_claim(mm, vmf->pte, pte_val(entry),
 						    pte_val(vmf->orig_pte), NACRE_LEAF_COW_REPLACE);
 			else {
@@ -3870,7 +3753,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 						RMAP_EXCLUSIVE);
 			folio_add_lru_vma(new_folio, vma);
 			BUG_ON(unshare && pte_write(entry));
-			if (nacc_new_private)
+			if (nacre_new_private)
 				nacre_private_claim(mm, vmf->pte, pte_val(entry),
 						    pfn_is_zero ? 0 : page_to_phys(vmf->page),
 						    pfn_is_zero ? 1 : 2);
@@ -4150,12 +4033,12 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 
 	vmf->page = vm_normal_page(vma, vmf->address, vmf->orig_pte);
 	if (!vmf->page) {
-		unsigned long nacc_pfn;
+		unsigned long nacre_pfn;
 
 		/* Let COW replacement drop the old detached leaf's RSS/rmap/ref. */
-		vmf->page = nacc_private_leaf_page(vma->vm_mm, vma,
+		vmf->page = nacre_private_leaf_page(vma->vm_mm, vma,
 						   vmf->address,
-						   vmf->orig_pte, &nacc_pfn);
+						   vmf->orig_pte, &nacre_pfn);
 	}
 
 	if (vmf->page)
@@ -4588,7 +4471,7 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 		goto fallback;
 
 	if (unlikely(nacre_mm_private(vma->vm_mm) &&
-		     nacc_addr_in_protected_user_leaf_range(vmf->address)))
+		     nacre_addr_in_protected_user_leaf_range(vmf->address)))
 		goto fallback;
 
 	/*
@@ -5138,7 +5021,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 		goto fallback;
 
 	if (unlikely(nacre_mm_private(vma->vm_mm) &&
-		     nacc_addr_in_protected_user_leaf_range(vmf->address)))
+		     nacre_addr_in_protected_user_leaf_range(vmf->address)))
 		goto fallback;
 
 	/*
@@ -5212,20 +5095,20 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	struct folio *folio;
 	vm_fault_t ret = 0;
 	int nr_pages = 1;
-	bool nacc_fresh_zero_leaf;
-	bool nacc_private_leaf;
+	bool nacre_fresh_zero_leaf;
+	bool nacre_private_leaf;
 	pte_t entry;
 
 	/* File mapping without ->vm_ops ? */
 	if (vma->vm_flags & VM_SHARED)
 		return VM_FAULT_SIGBUS;
 
-	nacc_private_leaf = nacc_should_install_private_leaf(vma, addr);
+	nacre_private_leaf = nacre_should_install_private_leaf(vma, addr);
 	/*
 	 * Takeover enables private faults for this mm. The Monitor checks the
 	 * bound root/CID/instance and owns zeroing before publishing the leaf.
 	 */
-	nacc_fresh_zero_leaf = nacc_private_leaf;
+	nacre_fresh_zero_leaf = nacre_private_leaf;
 
 	/*
 	 * Use pte_alloc() instead of pte_alloc_map(), so that OOM can
@@ -5234,9 +5117,9 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (pte_alloc(vma->vm_mm, vmf->pmd))
 		return VM_FAULT_OOM;
 
-	/* Use the zero-page for reads unless NaCC requires a private leaf. */
+	/* Use the zero-page for reads unless NACRE requires a private leaf. */
 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
-			!nacc_private_leaf &&
+			!nacre_private_leaf &&
 			!mm_forbids_zeropage(vma->vm_mm)) {
 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
 						vma->vm_page_prot));
@@ -5307,12 +5190,12 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		return handle_userfault(vmf, VM_UFFD_MISSING);
 	}
 
-	if (unlikely(nacc_private_leaf && WARN_ON_ONCE(nr_pages != 1))) {
+	if (unlikely(nacre_private_leaf && WARN_ON_ONCE(nr_pages != 1))) {
 		ret = VM_FAULT_SIGBUS;
 		goto release;
 	}
-	if (unlikely(nacc_private_leaf && !nacc_fresh_zero_leaf))
-		entry = pte_mknacc(entry);
+	if (unlikely(nacre_private_leaf && !nacre_fresh_zero_leaf))
+		entry = pte_mknacre(entry);
 
 	folio_ref_add(folio, nr_pages - 1);
 	add_mm_counter(vma->vm_mm, MM_ANONPAGES, nr_pages);
@@ -5322,7 +5205,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 setpte:
 	if (vmf_orig_pte_uffd_wp(vmf))
 		entry = pte_mkuffd_wp(entry);
-	if (unlikely(nacc_fresh_zero_leaf)) {
+	if (unlikely(nacre_fresh_zero_leaf)) {
 		page_table_check_ptes_set(vma->vm_mm, vmf->pte, entry, 1);
 		nacre_private_claim(vma->vm_mm, vmf->pte, pte_val(entry), 0, 1);
 	} else {
@@ -5508,7 +5391,7 @@ vm_fault_t do_set_pmd(struct vm_fault *vmf, struct page *page)
  */
 static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 		struct page *page, unsigned int nr, unsigned long addr,
-		struct folio **nacc_import_folio, bool *nacc_imported)
+		struct folio **nacre_import_folio, bool *nacre_imported)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
@@ -5528,11 +5411,11 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	if (unlikely(vmf_orig_pte_uffd_wp(vmf)))
 		entry = pte_mkuffd_wp(entry);
 
-	if (unlikely(nacc_import_folio && *nacc_import_folio)) {
-		struct folio *private_folio = *nacc_import_folio;
+	if (unlikely(nacre_import_folio && *nacre_import_folio)) {
+		struct folio *private_folio = *nacre_import_folio;
 
 		VM_BUG_ON_FOLIO(nr != 1, private_folio);
-		*nacc_import_folio = NULL;
+		*nacre_import_folio = NULL;
 		__folio_mark_uptodate(private_folio);
 		folio_add_new_anon_rmap(private_folio, vma, addr,
 					RMAP_EXCLUSIVE);
@@ -5541,8 +5424,8 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 			pte_val(pfn_pte(folio_pfn(private_folio),
 					__pgprot(pte_val(entry) & 0xff))),
 			page_to_phys(page), 2);
-		if (nacc_imported)
-			*nacc_imported = true;
+		if (nacre_imported)
+			*nacre_imported = true;
 		update_mmu_cache_range(vmf, vma, addr, vmf->pte, nr);
 		return MM_ANONPAGES;
 	}
@@ -5558,7 +5441,7 @@ static int __set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	if (nacre_shmem_vma(vma)) {
         VM_BUG_ON_FOLIO(nr != 1 || !PageNacre(page), folio);
         nacre_shmem_map(vmf, pte_val(entry));
-    } else if (nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_NACC_APP) &&
+    } else if (nacre_mm_private(vma->vm_mm) && (vma->vm_flags & VM_NACRE_APP) &&
         (vma->vm_flags & VM_SHARED) && vma_is_anon_shmem(vma)) {
         /* Eager population installs each fresh shmem page before fork can inherit it. */
         VM_BUG_ON_FOLIO(nr != 1 || PageNacre(page), folio);
@@ -5611,11 +5494,11 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct page *page;
 	struct folio *folio;
-	struct folio *nacc_import_folio = NULL;
+	struct folio *nacre_import_folio = NULL;
 	vm_fault_t ret;
 	bool is_cow = (vmf->flags & FAULT_FLAG_WRITE) &&
 		      !(vma->vm_flags & VM_SHARED);
-	bool nacc_imported = false;
+	bool nacre_imported = false;
 	int type, nr_pages;
 	unsigned long addr = vmf->address;
 
@@ -5681,22 +5564,22 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		}
 	}
 
-	if (unlikely(nacc_should_import_file_leaf(vma, addr, is_cow,
+	if (unlikely(nacre_should_import_file_leaf(vma, addr, is_cow,
 						  nr_pages))) {
 		ret = vmf_anon_prepare(vmf);
 		if (ret)
 			return ret;
-		nacc_import_folio = folio_prealloc(vma->vm_mm, vma, addr,
+		nacre_import_folio = folio_prealloc(vma->vm_mm, vma, addr,
 						   false);
-		if (!nacc_import_folio)
+		if (!nacre_import_folio)
 			return VM_FAULT_OOM;
 	}
 
 	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
 				       addr, &vmf->ptl);
 	if (!vmf->pte) {
-		if (nacc_import_folio)
-			folio_put(nacc_import_folio);
+		if (nacre_import_folio)
+			folio_put(nacre_import_folio);
 		return VM_FAULT_NOPAGE;
 	}
 
@@ -5713,16 +5596,16 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 
 	folio_ref_add(folio, nr_pages - 1);
 	type = __set_pte_range(vmf, folio, page, nr_pages, addr,
-			       &nacc_import_folio, &nacc_imported);
+			       &nacre_import_folio, &nacre_imported);
 	add_mm_counter(vma->vm_mm, type, nr_pages);
-	if (unlikely(nacc_imported))
+	if (unlikely(nacre_imported))
 		put_page(page);
 	ret = 0;
 
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
-	if (nacc_import_folio)
-		folio_put(nacc_import_folio);
+	if (nacre_import_folio)
+		folio_put(nacre_import_folio);
 	return ret;
 }
 
@@ -5822,7 +5705,7 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 static inline bool should_fault_around(struct vm_fault *vmf)
 {
 	if (nacre_mm_private(vmf->vma->vm_mm) &&
-	    nacc_addr_in_protected_user_leaf_range(vmf->address))
+	    nacre_addr_in_protected_user_leaf_range(vmf->address))
 		return false;
 
 	/* No ->map_pages?  No way to fault around... */
@@ -6394,7 +6277,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 
 	if (nacre_mm_private(mm) &&
 	    (vm_flags & (VM_IO | VM_PFNMAP | VM_MIXEDMAP)) &&
-	    !nacc_vma_is_vdso_text(vma) && !nacc_vma_is_vvar_abi_data(vma))
+	    !nacre_vma_is_vdso_text(vma) && !nacre_vma_is_vvar_abi_data(vma))
 		return VM_FAULT_SIGBUS;
 
 	pgd = pgd_offset(mm, address);
@@ -7178,7 +7061,7 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			if (bytes > PAGE_SIZE-offset)
 				bytes = PAGE_SIZE-offset;
 
-			private_copied = nacc_access_remote_vm_private_copy(mm,
+			private_copied = nacre_access_remote_vm_private_copy(mm,
 									   vma,
 									   addr,
 									   buf,
@@ -7212,7 +7095,7 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			if (bytes > PAGE_SIZE-offset)
 				bytes = PAGE_SIZE-offset;
 
-			private_copied = nacc_access_remote_vm_private_copy(mm,
+			private_copied = nacre_access_remote_vm_private_copy(mm,
 									   vma,
 									   addr,
 									   buf,

@@ -7,7 +7,7 @@
 #include <linux/sched/signal.h>
 #include <linux/sched/mm.h>
 #include <linux/syscalls.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_ptp.h>
 #include <asm/sbi.h>
@@ -23,8 +23,8 @@ bool nacre_agent_vma(const struct vm_area_struct *vma)
 {
 	if (vma->vm_ops != &nacre_reservation_ops)
 		return false;
-	BUG_ON(vma->vm_start != NACC_AGENT_VA_BASE ||
-	       vma->vm_end != NACC_AGENT_VA_SLOT_END || vma->vm_flags != NACRE_VMA_FLAGS);
+	BUG_ON(vma->vm_start != NACRE_AGENT_VA_BASE ||
+	       vma->vm_end != NACRE_AGENT_VA_SLOT_END || vma->vm_flags != NACRE_VMA_FLAGS);
 	return true;
 }
 
@@ -52,10 +52,9 @@ unsigned long nacre_app_vm_pages(struct mm_struct *mm)
 SYSCALL_DEFINE1(nacre_register, unsigned long, cid)
 {
 	if (!cid || cid >> 48 || !current->mm ||
-	    TASK_SIZE < NACC_AGENT_VA_SLOT_END || (csr_read(CSR_SATP) >> 60) != 8)
+	    TASK_SIZE < NACRE_AGENT_VA_SLOT_END || (csr_read(CSR_SATP) >> 60) != 8)
 		return -EINVAL;
-	if (current->thread.nacre_flag != NACRE_IDLE ||
-	    current->thread.nacc_flag || current->thread.nacc_cid)
+	if (current->thread.nacre_flag != NACRE_IDLE)
 		return -EBUSY;
 	if (sbi_ecall(NACRE_SBI_REGISTER_EXT, 23, 0, 0, 0, 0, 0, 0).error)
 		return -EBUSY;
@@ -81,15 +80,15 @@ int nacre_exec_reserve(struct mm_struct *mm)
 	ret = mmap_write_lock_killable(mm);
 	if (ret)
 		return ret;
-	if (find_vma_intersection(mm, NACC_AGENT_VA_BASE, NACC_AGENT_VA_SLOT_END))
+	if (find_vma_intersection(mm, NACRE_AGENT_VA_BASE, NACRE_AGENT_VA_SLOT_END))
 		panic("NACRE reservation conflict");
 	vma = vm_area_alloc(mm);
 	if (!vma) {
 		ret = -ENOMEM;
 		goto unlock;
 	}
-	vma->vm_start = NACC_AGENT_VA_BASE;
-	vma->vm_end = NACC_AGENT_VA_SLOT_END;
+	vma->vm_start = NACRE_AGENT_VA_BASE;
+	vma->vm_end = NACRE_AGENT_VA_SLOT_END;
 	vm_flags_init(vma, NACRE_VMA_FLAGS);
 	vma->vm_page_prot = PAGE_NONE;
 	vma->vm_ops = &nacre_reservation_ops;
@@ -142,9 +141,9 @@ int nacre_exec_prepare(struct linux_binprm *bprm)
 	mmap_read_lock(mm);
 	asm volatile(".global nacre_exec_check_reservation\n"
 		     "nacre_exec_check_reservation: nop" ::: "memory");
-	vma = find_vma_intersection(mm, NACC_AGENT_VA_BASE, NACC_AGENT_VA_SLOT_END);
-	if (!vma || vma->vm_start != NACC_AGENT_VA_BASE ||
-	    vma->vm_end != NACC_AGENT_VA_SLOT_END || vma->vm_flags != NACRE_VMA_FLAGS ||
+	vma = find_vma_intersection(mm, NACRE_AGENT_VA_BASE, NACRE_AGENT_VA_SLOT_END);
+	if (!vma || vma->vm_start != NACRE_AGENT_VA_BASE ||
+	    vma->vm_end != NACRE_AGENT_VA_SLOT_END || vma->vm_flags != NACRE_VMA_FLAGS ||
 	    vma->vm_ops != &nacre_reservation_ops || vma->vm_file ||
 	    pgprot_val(vma->vm_page_prot) != pgprot_val(PAGE_NONE))
 		panic("NACRE exec reservation changed");
@@ -154,8 +153,8 @@ int nacre_exec_prepare(struct linux_binprm *bprm)
 	local_irq_save(flags);
 	sbi_ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, NACRE_SBI_PREPARE,
 			    0, 0, 0, 0, 0, 0);
-	if (sbi_ret.error || sbi_ret.value < NACC_AGENT_VA_BASE ||
-	    sbi_ret.value >= NACC_AGENT_VA_SLOT_END || (sbi_ret.value & 3))
+	if (sbi_ret.error || sbi_ret.value < NACRE_AGENT_VA_BASE ||
+	    sbi_ret.value >= NACRE_AGENT_VA_SLOT_END || (sbi_ret.value & 3))
 		panic("NACRE prepare failed: error=%ld entry=%lx",
 		      sbi_ret.error, sbi_ret.value);
 	mm->context.nacre_prepared = 1;

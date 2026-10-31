@@ -7,7 +7,7 @@
  */
 
 #include <linux/capability.h>
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_registration.h>
 #endif
 #include <linux/mman.h>
@@ -389,7 +389,7 @@ static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
 		if (!pte_present(ptent))
 			continue;
 		folio = vm_normal_folio(vma, addr, ptent);
-#ifdef NACC
+#ifdef NACRE
 		if (!folio) {
 			struct page *page = nacre_private_page_metadata(vma, addr, ptent);
 			if (page)
@@ -772,7 +772,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 
 	ret = -ENOMEM;
 	total_vm = current->mm->total_vm;
-#ifdef NACC
+#ifdef NACRE
 	if (flags & MCL_CURRENT)
 		total_vm = nacre_app_vm_pages(current->mm);
 #endif

@@ -3,7 +3,7 @@
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <asm/csr.h>
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #include <asm/nacre_registration.h>
 #include <asm/nacre_ptp.h>
 #include <linux/nacre_shmem.h>
@@ -59,7 +59,7 @@ void nacre_mm_init(struct mm_struct *mm, bool fork)
 	if (current->thread.nacre_flag == NACRE_IDLE)
 		return;
 	BUG_ON((current->thread.nacre_flag != NACRE_REQUESTED && current->thread.nacre_flag != NACRE_HANDOFF) || mm == current->mm ||
-	       mm->context.nacre_cid || mm->context.nacc_state ||
+	       mm->context.nacre_cid ||
 	       !current->thread.nacre_cid || (csr_read(CSR_SATP) >> 60) != 8);
 	/* Query once on first NACRE construction, then reuse across mm lifetimes. */
 	if (!pool_base) {
@@ -145,7 +145,7 @@ void nacre_ptp_dtor(struct ptdesc *ptdesc, unsigned long pfn,
 	 * observe the same zero state that the allocator would have provided.
 	 */
 	WRITE_ONCE(*(unsigned long *)&ptdesc->ptl, 0);
-	nacc_debug("[Linux]: %s: reclaimed pfn=%lx level=%u old_ptl=%lx new_ptl=%lx\n",
+	nacre_debug("[Linux]: %s: reclaimed pfn=%lx level=%u old_ptl=%lx new_ptl=%lx\n",
 		   tag, pfn, level, old_ptl,
 		   nacre_ptdesc_raw_ptl(ptdesc));
 }
@@ -186,7 +186,7 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 	/* Leaf PTPs are readable in S; the caller holds the native PTE lock. */
 	unsigned long old = READ_ONCE(*(unsigned long *)slot);
 	unsigned long retired = checked(PTP_UPDATE, __pa(mm->pgd), __pa(slot), value, op);
-	if (!op && !value && pte_nacc(__pte(old)))
+	if (!op && !value && pte_nacre(__pte(old)))
 		nacre_private_released(old, retired);
 	else
 		BUG_ON(retired);
@@ -199,7 +199,7 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 bool nacre_agent_slot(struct mm_struct *mm, unsigned long addr)
 {
 	return mm->context.nacre_prepared &&
-	       addr >= NACC_AGENT_VA_BASE && addr < NACC_AGENT_VA_SLOT_END;
+	       addr >= NACRE_AGENT_VA_BASE && addr < NACRE_AGENT_VA_SLOT_END;
 }
 
 void nacre_root_retire(struct mm_struct *mm)

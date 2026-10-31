@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/pagewalk.h>
-#ifdef NACC
+#ifdef NACRE
 #include <asm/nacre_registration.h>
 #endif
 #include <linux/highmem.h>
@@ -344,7 +344,7 @@ static int __walk_page_range(unsigned long start, unsigned long end,
 			return err;
 	}
 
-#ifdef NACC
+#ifdef NACRE
 	/* AS owns these supervisor PTPs; they have no Linux ptdesc/ptlock lifecycle.
 	 * Report the reserved range as holes, retaining the caller's VMA callbacks. */
 	if (nacre_agent_vma(vma)) {

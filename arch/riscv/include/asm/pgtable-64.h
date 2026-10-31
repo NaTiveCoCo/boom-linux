@@ -75,7 +75,7 @@ typedef struct {
  *   N      MT     reserved     PFN      RSW category   D   A   G   U   X   W   R   V
  */
 #define _PAGE_PFN_MASK  GENMASK(53, 10)
-#define _PAGE_NACC      _PAGE_SOFT /* RSW=11; bit 54 remains reserved. */
+#define _PAGE_NACRE      _PAGE_SOFT /* RSW=11; bit 54 remains reserved. */
 
 /*
  * [63] Svnapot definitions:

@@ -123,11 +123,6 @@ void pte_free_defer(struct mm_struct *mm, pgtable_t pgtable);
 #ifndef pmd_offset
 static inline pmd_t *pmd_offset(pud_t *pud, unsigned long address)
 {
-// #ifdef CONFIG_RISCV
-// 	if(current->thread.nacc_flag){
-// 		return (pmd_t *)pud_page_nacc(*pud) + pmd_index(address);
-// 	}
-// #endif
 	return pud_pgtable(*pud) + pmd_index(address);
 }
 #define pmd_offset pmd_offset

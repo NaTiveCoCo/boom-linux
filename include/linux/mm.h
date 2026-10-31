@@ -33,7 +33,7 @@
 #include <linux/slab.h>
 
 #ifdef CONFIG_RISCV
-#include <asm/nacc.h>
+#include <asm/nacre.h>
 #endif
 
 struct mempolicy;
@@ -315,7 +315,6 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_WIPEONFORK	0x02000000	/* Wipe VMA contents in child. */
 #define VM_DONTDUMP	0x04000000	/* Do not include in the core dump */
 
-#define VM_NACC 0x08000000 /* This region is of the VM_NACC usage. */
 #ifdef CONFIG_MEM_SOFT_DIRTY
 # define VM_SOFTDIRTY	0x08000000	/* Not soft dirty clean area */
 #else
@@ -433,10 +432,10 @@ extern unsigned int kobjsize(const void *objp);
 #endif
 
 #ifdef CONFIG_64BIT
-#define VM_NACC_APP_BIT		41
-#define VM_NACC_APP		BIT(VM_NACC_APP_BIT)	/* NaCC app VMA bookkeeping */
+#define VM_NACRE_APP_BIT		41
+#define VM_NACRE_APP		BIT(VM_NACRE_APP_BIT)	/* NACRE app VMA bookkeeping */
 #else
-#define VM_NACC_APP		VM_NONE
+#define VM_NACRE_APP		VM_NONE
 #endif
 
 #ifdef CONFIG_64BIT
@@ -2371,7 +2370,7 @@ struct folio *vm_normal_folio(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte);
 struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte);
-#ifdef NACC
+#ifdef NACRE
 /* Private-leaf metadata only: do not admit these pages to generic GUP/content paths. */
 struct page *nacre_private_page_metadata(struct vm_area_struct *vma,
 				       unsigned long addr, pte_t pte);
