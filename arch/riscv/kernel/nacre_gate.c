@@ -82,6 +82,11 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
+    case __NR_getpid:
+        /* The zeroed frame already contains every unused argument. */
+        regs->cause = EXC_SYSCALL;
+        regs->a7 = kind;
+        break;
     case NACRE_GATE_FD_PRECHECK:
     case NACRE_GATE_SIGNAL:
     case NACRE_GATE_USER_ACCESS:
@@ -316,7 +321,6 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_times:
     case __NR_getrusage:
     case __NR_sched_yield:
-    case __NR_getpid:
     case __NR_getppid:
     case __NR_getuid:
     case __NR_geteuid:
@@ -482,7 +486,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
             do_group_exit(SIGKILL);
         }
     }
-    nacre_activate();
+    /* Ordinary returns restore AS-owned task metadata; END publishes M updates. */
     instrumentation_end();
 }
 
