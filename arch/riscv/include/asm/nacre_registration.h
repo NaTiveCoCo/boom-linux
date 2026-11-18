@@ -73,6 +73,7 @@ void nacre_exec_commit(void);
 void nacre_exec_mmput(struct mm_struct *mm);
 void nacre_exit(void);
 void nacre_unregister_asm(unsigned long cid, unsigned long pid, struct pt_regs *regs);
+long nacre_gate_fd_precheck(struct pt_regs *regs, unsigned long syscall);
 void nacre_user_return_prepare(struct pt_regs *regs);
 #endif
 #endif

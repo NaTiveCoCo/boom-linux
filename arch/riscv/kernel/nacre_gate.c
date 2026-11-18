@@ -66,6 +66,43 @@ static __always_inline bool nacre_clone_needs_handoff(unsigned long flags)
          namespace == CLONE_NEWNS || namespace == CLONE_NEWUTS));
 }
 
+/* Run after syscall entry accounting, within the original AS/S roundtrip. */
+long nacre_gate_fd_precheck(struct pt_regs *regs, unsigned long syscall)
+{
+    unsigned long second = 0, flags = 0;
+    switch (syscall) {
+    case __NR_read: case __NR_write: case __NR_pread64: case __NR_pwrite64:
+    case __NR_readahead: case __NR_fadvise64: case __NR_fallocate:
+    case __NR_readv: case __NR_writev: case __NR_preadv: case __NR_pwritev:
+    case __NR_preadv2: case __NR_pwritev2:
+        break;
+    case __NR_sendfile: case __NR_tee:
+        second = regs->a1; flags = 1;
+        break;
+    case __NR_copy_file_range: case __NR_splice:
+        second = regs->a2; flags = 1;
+        if (syscall == __NR_splice)
+            flags |= (regs->a1 ? 2 : 0) | (regs->a3 ? 4 : 0);
+        break;
+    case __NR_sendto: case __NR_recvfrom: case __NR_sendmmsg:
+    case __NR_sendmsg: case __NR_recvmsg:
+        flags = 8;
+        break;
+    case __NR_ioctl: {
+        unsigned int cmd = regs->a1;
+        flags = 16;
+        /* Same bounded error-only encoding class as the AS marshaller. */
+        if (!(cmd >> 30) && ((cmd >> 16) & 0x3fff) && ((cmd >> 8) & 255) >= 0x80) {
+            flags = 32; second = cmd;
+        }
+        break;
+    }
+    default:
+        return 0;
+    }
+    return nacre_shmem_precheck(regs->orig_a0, second, flags);
+}
+
 /* Each native handler owns its user-entry/exit accounting and scheduling. */
 asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid,
 					  struct pt_regs *regs, unsigned long kind,
@@ -82,11 +119,6 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     memset(regs, 0, sizeof(*regs));
     regs->status = SR_SPIE | fs;
     switch (kind) {
-    case __NR_getpid:
-        /* The zeroed frame already contains every unused argument. */
-        regs->cause = EXC_SYSCALL;
-        regs->a7 = kind;
-        break;
     case NACRE_GATE_FD_PRECHECK:
     case NACRE_GATE_SIGNAL:
     case NACRE_GATE_USER_ACCESS:
@@ -321,12 +353,13 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_times:
     case __NR_getrusage:
     case __NR_sched_yield:
+    case __NR_getpid:
     case __NR_getppid:
     case __NR_getuid:
     case __NR_geteuid:
     case __NR_getgid:
     case __NR_getegid: {
-        unsigned long args[6];
+        const struct pt_regs *gate = regs - 1;
         static_assert(sizeof(struct stat) == 128);
         static_assert(sizeof(struct termios) == 36);
         static_assert(sizeof(struct new_utsname) == 390);
@@ -380,23 +413,21 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
         static_assert(NR_CPUS <= 64);
         static_assert(sizeof(struct __kernel_timespec) == 16);
         static_assert(sizeof(struct __kernel_old_itimerval) == 32);
-        /* The fixed argument area and pointees are in the sealed public buffer. */
-        /* IRQs are still disabled; resident arguments must be readable without faulting in pages. */
-        BUG_ON(copy_from_user_nofault(args, (void __user *)value, sizeof(args)));
+        /* nacre_gate_entry saved the public scalar registers in the lower frame. */
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
-        regs->a0 = regs->orig_a0 = args[0];
-        regs->a1 = args[1];
-        regs->a2 = args[2];
-        regs->a3 = args[3];
-        regs->a4 = args[4];
-        regs->a5 = args[5];
+        regs->a0 = regs->orig_a0 = gate->s0;
+        regs->a1 = gate->s1;
+        regs->a2 = gate->s2;
+        regs->a3 = gate->s3;
+        regs->a4 = gate->s4;
+        regs->a5 = gate->s5;
         if (kind == __NR_sigaltstack) {
             static_assert(sizeof(stack_t) == 24);
             static_assert(offsetof(stack_t, ss_flags) == 8);
             static_assert(offsetof(stack_t, ss_size) == 16);
             /* Native on_sig_stack uses the existing explicitly shared stack control. */
-            regs->sp = args[2];
+            regs->sp = gate->s2;
         }
         break;
     }
