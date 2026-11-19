@@ -66,12 +66,15 @@ static __always_inline bool nacre_clone_needs_handoff(unsigned long flags)
          namespace == CLONE_NEWNS || namespace == CLONE_NEWUTS));
 }
 
-/* Run after syscall entry accounting, within the original AS/S roundtrip. */
+/* Run after syscall entry accounting, within the original AS/S roundtrip.
+ * Scalar read/write use native fdget and shmem iter checks. AS still requests
+ * NACRE_GATE_FD_PRECHECK explicitly before resolving private page faults.
+ * Vector and other operations retain prechecks before importing user metadata.
+ */
 long nacre_gate_fd_precheck(struct pt_regs *regs, unsigned long syscall)
 {
     unsigned long second = 0, flags = 0;
     switch (syscall) {
-    case __NR_read: case __NR_write: case __NR_pread64: case __NR_pwrite64:
     case __NR_readahead: case __NR_fadvise64: case __NR_fallocate:
     case __NR_readv: case __NR_writev: case __NR_preadv: case __NR_pwritev:
     case __NR_preadv2: case __NR_pwritev2:
