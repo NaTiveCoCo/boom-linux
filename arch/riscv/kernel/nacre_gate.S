@@ -20,11 +20,17 @@ SYM_CODE_START(nacre_gate_entry)
 	REG_L sp, TASK_TI_KERNEL_SP(tp)
 #endif
 	addi sp, sp, -PT_SIZE_ON_STACK
-	REG_S x1, PT_RA(sp)
-	REG_S x3, PT_GP(sp)
-	REG_S x4, PT_TP(sp)
-	REG_S x5, PT_T0(sp)
-	save_from_x6_to_x31
+	/* Only dispatch scalars and the fixed AS return selectors are live. */
+	REG_S a0, PT_A0(sp)
+	REG_S a1, PT_A1(sp)
+	REG_S a2, PT_A2(sp)
+	REG_S a7, PT_A7(sp)
+	REG_S s0, PT_S0(sp)
+	REG_S s1, PT_S1(sp)
+	REG_S s2, PT_S2(sp)
+	REG_S s3, PT_S3(sp)
+	REG_S s4, PT_S4(sp)
+	REG_S s5, PT_S5(sp)
 	addi t0, sp, PT_SIZE_ON_STACK
 	REG_S t0, PT_SP(sp)
 	li t0, SR_SUM | SR_FS_VS
@@ -34,8 +40,6 @@ SYM_CODE_START(nacre_gate_entry)
 	REG_S t0, PT_EPC(sp)
 	csrr t0, CSR_CAUSE
 	REG_S t0, PT_CAUSE(sp)
-	REG_S zero, PT_BADADDR(sp)
-	REG_S zero, PT_ORIG_A0(sp)
 	csrw CSR_SCRATCH, zero
 	/* Scheduling may return directly to an ordinary task without another trap. */
 	li t0, NACRE_ASSTATUS_SPA
@@ -95,17 +99,16 @@ SYM_CODE_START(nacre_gate_return)
 	ori t0, t0, SR_SPP
 	csrw CSR_STATUS, t0
 	REG_L t0, PT_EPC(sp)
-	/* Keep the full R for Linux; only clear LR, never derive an AS target here. */
+	/* Clear LR; the AS vector is selected by hardware, not this saved EPC. */
 	REG_SC zero, t0, PT_EPC(sp)
-	REG_L x1, PT_RA(sp)
-	REG_L x3, PT_GP(sp)
-	REG_L x4, PT_TP(sp)
-	REG_L x5, PT_T0(sp)
-	restore_from_x6_to_x31
+	REG_L a0, PT_A0(sp)
+	REG_L a1, PT_A1(sp)
+	REG_L a2, PT_A2(sp)
+	REG_L a7, PT_A7(sp)
 	REG_L sp, PT_SP(sp)
 	/* S returns the native result as a scalar; AS never loads the public frame. */
 	REG_L a3, PT_A0(a2)
-    REG_L a4, PT_T6(a2)
+	REG_L a4, PT_T6(a2)
 	sret
 SYM_CODE_END(nacre_gate_return)
 ASM_NOKPROBE(nacre_gate_return)

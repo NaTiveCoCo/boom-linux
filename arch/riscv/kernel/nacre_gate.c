@@ -119,22 +119,24 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     /* The gate saved AU's public FS before disabling FP in S. */
     unsigned long fs = (regs - 1)->status & SR_FS;
     /* AS exports only scalars; all accesses to Linux's frame execute in S. */
-    /* Clear every public register, including signal t6 and clone's full frame.
+    /* Perf/ptrace can read every public slot, even on ordinary syscalls.
+     * Keep unused slots zero; assign arguments once in the selected case.
      * Explicit fields avoid GCC turning a word loop back into memset. */
     static_assert(sizeof(*regs) == 36 * sizeof(unsigned long));
     regs->epc = regs->ra = regs->sp = regs->gp = regs->tp = 0;
     regs->t0 = regs->t1 = regs->t2 = regs->s0 = regs->s1 = 0;
-    regs->a0 = regs->a1 = regs->a2 = regs->a3 = regs->a4 = regs->a5 = 0;
-    regs->a6 = regs->a7 = regs->s2 = regs->s3 = regs->s4 = regs->s5 = 0;
+    regs->a6 = regs->s2 = regs->s3 = regs->s4 = regs->s5 = 0;
     regs->s6 = regs->s7 = regs->s8 = regs->s9 = regs->s10 = regs->s11 = 0;
     regs->t3 = regs->t4 = regs->t5 = regs->t6 = 0;
-    regs->badaddr = regs->cause = regs->orig_a0 = 0;
+    regs->badaddr = 0;
     regs->status = SR_SPIE | fs;
     switch (kind) {
     case NACRE_GATE_FD_PRECHECK:
     case NACRE_GATE_SIGNAL:
     case NACRE_GATE_USER_ACCESS:
     case NACRE_GATE_BUFFER_GROW:
+        regs->a0 = regs->orig_a0 = regs->a1 = regs->a2 = 0;
+        regs->a3 = regs->a4 = regs->a5 = regs->a7 = 0;
         regs->cause = EXC_SYSCALL;
         break;
     case NACRE_GATE_XATTR:
@@ -450,6 +452,7 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case __NR_exit_group:
     case __NR_brk:
     case __NR_mprotect:
+        regs->a3 = regs->a4 = regs->a5 = 0;
         regs->cause = EXC_SYSCALL;
         regs->a7 = kind;
         regs->a0 = regs->orig_a0 = value;
@@ -459,8 +462,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
     case EXC_INST_PAGE_FAULT: case EXC_LOAD_PAGE_FAULT: case EXC_STORE_PAGE_FAULT:
         regs->cause = kind;
         regs->badaddr = value;
-        break;
+        fallthrough;
     case CAUSE_IRQ_FLAG | IRQ_S_TIMER:
+        regs->a0 = regs->orig_a0 = regs->a1 = regs->a2 = 0;
+        regs->a3 = regs->a4 = regs->a5 = regs->a7 = 0;
         regs->cause = kind;
         break;
     default:
