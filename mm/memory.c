@@ -3924,6 +3924,9 @@ static vm_fault_t wp_page_shared(struct vm_fault *vmf, struct folio *folio)
 static bool wp_can_reuse_anon_folio(struct folio *folio,
 				    struct vm_area_struct *vma)
 {
+	/* PageNacre holds one protection reference until M retires the last PTE. */
+	int expected = 1 + (PageNacre(&folio->page) ? 1 : 0);
+
 	/*
 	 * We could currently only reuse a subpage of a large folio if no
 	 * other subpages of the large folios are still mapped. However,
@@ -3933,6 +3936,8 @@ static bool wp_can_reuse_anon_folio(struct folio *folio,
 	 */
 	if (folio_test_large(folio))
 		return false;
+	if (PageNacre(&folio->page) && folio_test_swapcache(folio))
+		return false;
 
 	/*
 	 * We have to verify under folio lock: these early checks are
@@ -3941,7 +3946,7 @@ static bool wp_can_reuse_anon_folio(struct folio *folio,
 	 *
 	 * KSM doesn't necessarily raise the folio refcount.
 	 */
-	if (folio_test_ksm(folio) || folio_ref_count(folio) > 3)
+	if (folio_test_ksm(folio) || folio_ref_count(folio) > expected + 2)
 		return false;
 	if (!folio_test_lru(folio))
 		/*
@@ -3949,18 +3954,18 @@ static bool wp_can_reuse_anon_folio(struct folio *folio,
 		 * remote LRU caches or references to LRU folios.
 		 */
 		lru_add_drain();
-	if (folio_ref_count(folio) > 1 + folio_test_swapcache(folio))
+	if (folio_ref_count(folio) > expected + folio_test_swapcache(folio))
 		return false;
 	if (!folio_trylock(folio))
 		return false;
 	if (folio_test_swapcache(folio))
 		folio_free_swap(folio);
-	if (folio_test_ksm(folio) || folio_ref_count(folio) != 1) {
+	if (folio_test_ksm(folio) || folio_ref_count(folio) != expected) {
 		folio_unlock(folio);
 		return false;
 	}
 	/*
-	 * Ok, we've got the only folio reference from our mapping
+	 * Ok, only our mapping and any PageNacre protection reference remain
 	 * and the folio is locked, it's dark out, and we're wearing
 	 * sunglasses. Hit it.
 	 */
