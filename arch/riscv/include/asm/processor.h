@@ -121,6 +121,7 @@ struct thread_struct {
 	/* A forced icache flush is not needed if migrating to the previous cpu. */
 	unsigned int prev_cpu;
 #endif
+    u8 nacre_grant_active;
 };
 
 /* Whitelist the fstate from the task_struct for hardened usercopy */

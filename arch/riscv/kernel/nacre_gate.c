@@ -117,7 +117,12 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
 	       current->thread.nacre_cid != cid || current->pid != pid ||
 	       regs != current_pt_regs());
     /* The gate saved AU's public FS before disabling FP in S. */
-    unsigned long fs = (regs - 1)->status & SR_FS;
+    struct pt_regs *gate_frame = regs - 1;
+    bool grant = gate_frame->a7 & NACRE_SERVICE_GRANT_BIT;
+    BUG_ON((gate_frame->a7 & ~NACRE_SERVICE_GRANT_BIT) != 1);
+    /* The trusted AS ingress retains its existing service selector. */
+    gate_frame->a7 = 1;
+    unsigned long fs = gate_frame->status & SR_FS;
     /* AS exports only scalars; all accesses to Linux's frame execute in S. */
     /* Perf/ptrace can read every public slot, even on ordinary syscalls.
      * Keep unused slots zero; assign arguments once in the selected case.
@@ -511,7 +516,10 @@ asmlinkage void noinstr nacre_gate_dispatch(unsigned long cid, unsigned long pid
             syscall_exit_to_user_mode(regs);
         }
         else {
+            BUG_ON(current->thread.nacre_grant_active);
+            if (grant) current->thread.nacre_grant_active = 1;
             do_trap_ecall_u(regs);
+            current->thread.nacre_grant_active = 0;
             nacre_signal_restart(regs);
         }
 		break;

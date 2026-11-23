@@ -14,6 +14,14 @@
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/csr.h>
+#ifdef NACRE
+#include <asm/nacre_registration.h>
+/* prepare_task_switch runs before switch_mm_irqs_off changes the SATP root. */
+#define prepare_arch_switch(next) do { \
+    if (unlikely(current->thread.nacre_grant_active)) \
+        nacre_grant_switch(NACRE_GRANT_SAVE); \
+} while (0)
+#endif
 
 #ifdef CONFIG_FPU
 extern void __fstate_save(struct task_struct *save_to);
@@ -92,6 +100,15 @@ static inline bool switch_to_should_flush_icache(struct task_struct *task)
 #define __set_prev_cpu(thread)
 #endif
 
+/* Resumed current and SATP already belong to next; rq IRQs remain disabled. */
+static inline void nacre_grant_switch_in(void)
+{
+#ifdef NACRE
+    if (unlikely(current->thread.nacre_grant_active))
+        nacre_grant_switch(NACRE_GRANT_RESTORE);
+#endif
+}
+
 #define switch_to(prev, next, last)			\
 do {							\
 	struct task_struct *__prev = (prev);		\
@@ -104,6 +121,7 @@ do {							\
 	if (switch_to_should_flush_icache(__next))	\
 		local_flush_icache_all();		\
 	((last) = __switch_to(__prev, __next));		\
+    nacre_grant_switch_in();                         \
 } while (0)
 
 #endif /* _ASM_RISCV_SWITCH_TO_H */

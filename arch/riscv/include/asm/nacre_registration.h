@@ -28,6 +28,9 @@
 #define NACRE_THREAD_SEAL 0x45
 #define NACRE_TASK_DETACH 0x46
 #define NACRE_FUTEX_COMPARE 0x47
+#define NACRE_GRANT_SAVE 0x53
+#define NACRE_GRANT_RESTORE 0x54
+#define NACRE_SERVICE_GRANT_BIT 0x100
 
 #define NACRE_IDLE 0
 #define NACRE_REQUESTED 1
@@ -36,6 +39,7 @@
 
 #ifndef __ASSEMBLY__
 #include <linux/types.h>
+void nacre_grant_switch(unsigned long fid);
 struct pt_regs;
 int nacre_futex_compare(u32 __user *address, u32 expected);
 struct vm_area_struct;

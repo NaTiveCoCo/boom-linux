@@ -5,6 +5,7 @@
 #include <asm/csr.h>
 #include <asm/hwcap.h>
 #include <asm/alternative-macros.h>
+#include <asm/asm-offsets.h>
 
 	.macro fixup op reg addr lbl
 100:
@@ -109,6 +110,12 @@ SYM_FUNC_START(fallback_scalar_usercopy)
 	j	.Lbyte_copy_tail
 
 .Lshift_copy:
+	/* Shift-copy reads before/after src; a byte Grant permits neither edge.
+	 * Keep aligned bulk copies and use exact accesses for this unaligned path. */
+	li t1, TASK_THREAD_NACRE_GRANT_ACTIVE
+	add t1, tp, t1
+	lbu t1, 0(t1)
+	bnez t1, .Lbyte_copy_tail
 
 	/*
 	 * Word copy with shifting.

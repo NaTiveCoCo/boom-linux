@@ -204,6 +204,13 @@ void nacre_user_return_prepare(struct pt_regs *regs)
     }
 }
 
+/* The caller runs with scheduler IRQs disabled and the task's own SATP. */
+void nacre_grant_switch(unsigned long fid)
+{
+    BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, fid, task_pid_vnr(current),
+                     0, 0, 0, 0, 0).error);
+}
+
 /* Cancel private execution before either task exit or exec switches away. */
 static bool nacre_cancel(void)
 {
@@ -216,6 +223,7 @@ static bool nacre_cancel(void)
 	BUG_ON(!current->mm || !current->mm->context.nacre_prepared ||
 	       !current->thread.nacre_cid);
 	local_irq_save(flags);
+    current->thread.nacre_grant_active = 0;
     if (current->thread.nacre_flag == NACRE_HANDOFF ||
         current->thread.nacre_flag == NACRE_FORK_CHILD) nacre_activate();
 	if (current->thread.nacre_flag == NACRE_HANDOFF || current->thread.nacre_flag == NACRE_FORK_CHILD)
