@@ -3,6 +3,22 @@
 #define _ASM_RISCV_NACRE_PTP_H
 
 #include <linux/types.h>
+
+#define NACRE_PTP_FORK_BATCH 0x50
+#define NACRE_PTP_ZAP_BATCH  0x51
+#define NACRE_PTP_BATCH_MAX  64
+
+struct nacre_ptp_fork_batch {
+	unsigned long count;
+	unsigned long entries_pte[NACRE_PTP_BATCH_MAX];
+	unsigned short indices[NACRE_PTP_BATCH_MAX];
+};
+
+struct nacre_ptp_zap_batch {
+	unsigned long count;
+	unsigned short indices[NACRE_PTP_BATCH_MAX];
+};
+
 struct mm_struct;
 struct ptdesc;
 struct page;
@@ -36,5 +52,12 @@ bool nacre_ptp_release(struct mm_struct *mm, struct ptdesc *ptdesc,
                         unsigned int level, bool installed);
 bool nacre_ptp_populate(struct mm_struct *mm, void *slot, unsigned long pfn);
 void nacre_ptp_unlink(struct mm_struct *mm, void *slot, unsigned long pfn);
+void nacre_ptp_fork_begin(struct mm_struct *mm, void *l0);
+void nacre_ptp_fork_flush(void);
+void nacre_ptp_fork_end(void);
+void nacre_ptp_fork_add(struct mm_struct *mm, unsigned long addr, void *slot,
+			unsigned long value);
+unsigned long nacre_ptp_zap_batch(struct mm_struct *mm, void *l0,
+				 const unsigned short *indices, unsigned long count);
 unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op);
 #endif

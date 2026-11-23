@@ -195,6 +195,85 @@ unsigned long nacre_ptp_update(void *slot, unsigned long value, unsigned long op
 	return old;
 }
 
+/* One hart, with IRQs and preemption disabled throughout collection/publication.
+ * Each input fits wholly inside one ordinary, physically contiguous BSS page. */
+static struct nacre_ptp_fork_batch fork_batch __aligned(PAGE_SIZE);
+static struct nacre_ptp_zap_batch zap_batch __aligned(PAGE_SIZE);
+static_assert(sizeof(fork_batch) <= PAGE_SIZE && sizeof(zap_batch) <= PAGE_SIZE);
+static_assert(NACRE_PTP_BATCH_MAX == BITS_PER_LONG);
+static struct mm_struct *fork_mm;
+static void *fork_l0;
+static unsigned long fork_irq_flags;
+static bool fork_active, zap_active;
+
+void nacre_ptp_fork_begin(struct mm_struct *mm, void *l0)
+{
+	unsigned long flags;
+	BUG_ON(!in_atomic() || !nacre_mm_managed(mm) || mm->context.nacre_prepared ||
+	       !nacre_ptp_contains(l0));
+	local_irq_save(flags);
+	BUG_ON(fork_active);
+	fork_active = true;
+	fork_irq_flags = flags;
+	fork_mm = mm;
+	fork_l0 = (void *)((unsigned long)l0 & PAGE_MASK);
+	BUG_ON(virt_to_ptdesc(l0)->pt_mm != mm || fork_batch.count);
+}
+
+void nacre_ptp_fork_flush(void)
+{
+	BUG_ON(!fork_active || !irqs_disabled());
+	if (!fork_batch.count) return;
+	checked(NACRE_PTP_FORK_BATCH, __pa(fork_mm->pgd), __pa(fork_l0),
+		__pa(&fork_batch), fork_batch.count);
+	fork_batch.count = 0;
+}
+
+void nacre_ptp_fork_end(void)
+{
+	nacre_ptp_fork_flush();
+	fork_active = false;
+	fork_mm = NULL;
+	fork_l0 = NULL;
+	local_irq_restore(fork_irq_flags);
+}
+
+void nacre_ptp_fork_add(struct mm_struct *mm, unsigned long addr, void *slot,
+			unsigned long value)
+{
+	pte_t pte = __pte(value);
+	unsigned long idx = ((unsigned long)slot & ~PAGE_MASK) / sizeof(pte_t);
+	BUG_ON(!fork_active || !irqs_disabled() || mm != fork_mm ||
+	       ((unsigned long)slot & PAGE_MASK) != (unsigned long)fork_l0 ||
+	       !pte_none(ptep_get(slot)) || !pte_present(pte) || !pte_nacre(pte) || pte_special(pte));
+	BUG_ON(fork_batch.count && idx <= fork_batch.indices[fork_batch.count - 1]);
+	page_table_check_ptes_set(mm, slot, pte, 1);
+	if (pte_exec(pte)) flush_icache_pte(mm, pte);
+	fork_batch.indices[fork_batch.count] = idx;
+	fork_batch.entries_pte[fork_batch.count++] = value;
+	if (fork_batch.count == NACRE_PTP_BATCH_MAX) nacre_ptp_fork_flush();
+	(void)addr;
+}
+
+unsigned long nacre_ptp_zap_batch(struct mm_struct *mm, void *l0,
+				 const unsigned short *indices, unsigned long count)
+{
+	unsigned long flags, retired;
+	BUG_ON(!in_atomic() || !nacre_mm_managed(mm) || !nacre_ptp_contains(l0) ||
+	       virt_to_ptdesc(l0)->pt_mm != mm || !count || count > NACRE_PTP_BATCH_MAX);
+	local_irq_save(flags);
+	BUG_ON(zap_active);
+	zap_active = true;
+	zap_batch.count = count;
+	memcpy(zap_batch.indices, indices, count * sizeof(*indices));
+	retired = checked(NACRE_PTP_ZAP_BATCH, __pa(mm->pgd), __pa(l0) & PAGE_MASK,
+			  __pa(&zap_batch), count);
+	BUG_ON(count < BITS_PER_LONG && (retired >> count));
+	zap_active = false;
+	local_irq_restore(flags);
+	return retired;
+}
+
 /* Test the root slot, not a VMA identity: free_pgtables may merge ranges. */
 bool nacre_agent_slot(struct mm_struct *mm, unsigned long addr)
 {

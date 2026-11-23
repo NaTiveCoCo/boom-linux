@@ -982,7 +982,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 
 static __always_inline void __copy_present_ptes(struct vm_area_struct *dst_vma,
 		struct vm_area_struct *src_vma, pte_t *dst_pte, pte_t *src_pte,
-		pte_t pte, unsigned long addr, int nr)
+		pte_t pte, unsigned long addr, int nr, bool nacre_batch)
 {
 	struct mm_struct *src_mm = src_vma->vm_mm;
 
@@ -1000,7 +1000,14 @@ static __always_inline void __copy_present_ptes(struct vm_area_struct *dst_vma,
 	if (!userfaultfd_wp(dst_vma))
 		pte = pte_clear_uffd_wp(pte);
 
-	set_ptes(dst_vma->vm_mm, addr, dst_pte, pte, nr);
+	/* Batch operations require hardware V; pte_present() includes PROT_NONE. */
+	if (nacre_batch && nr == 1 && (pte_val(pte) & _PAGE_PRESENT) && pte_nacre(pte) &&
+	    !pte_special(pte) && !pte_protnone(pte)) {
+		nacre_ptp_fork_add(dst_vma->vm_mm, addr, dst_pte, pte_val(pte));
+	} else {
+		if (nacre_batch) nacre_ptp_fork_flush();
+		set_ptes(dst_vma->vm_mm, addr, dst_pte, pte, nr);
+	}
 }
 
 /*
@@ -1013,7 +1020,7 @@ static __always_inline void __copy_present_ptes(struct vm_area_struct *dst_vma,
 static inline int
 copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		 pte_t *dst_pte, pte_t *src_pte, pte_t pte, unsigned long addr,
-		 int max_nr, int *rss, struct folio **prealloc)
+		 int max_nr, int *rss, struct folio **prealloc, bool nacre_batch)
 {
 	struct page *page;
 	struct folio *folio;
@@ -1040,6 +1047,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	 * by keeping the batching logic separate.
 	 */
 	if (unlikely(!*prealloc && folio_test_large(folio) && max_nr != 1)) {
+		if (nacre_batch) nacre_ptp_fork_flush();
 		if (src_vma->vm_flags & VM_SHARED)
 			flags |= FPB_IGNORE_DIRTY;
 		if (!vma_soft_dirty_enabled(src_vma))
@@ -1063,7 +1071,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		if (any_writable)
 			pte = pte_mkwrite(pte, src_vma);
 		__copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte, pte,
-				    addr, nr);
+				    addr, nr, nacre_batch);
 		return nr;
 	}
 
@@ -1093,7 +1101,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	}
 
 copy_pte:
-	__copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte, pte, addr, 1);
+	__copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte, pte, addr, 1, nacre_batch);
 	return 1;
 }
 
@@ -1136,6 +1144,7 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	swp_entry_t entry = (swp_entry_t){0};
 	struct folio *prealloc = NULL;
 	int nr;
+	bool nacre_batch;
 
 again:
 	progress = 0;
@@ -1163,6 +1172,9 @@ again:
 	spin_lock_nested(src_ptl, SINGLE_DEPTH_NESTING);
 	orig_src_pte = src_pte;
 	orig_dst_pte = dst_pte;
+	nacre_batch = nacre_mm_managed(dst_mm) && !dst_mm->context.nacre_prepared &&
+		      nacre_mm_private(dst_mm) && nacre_ptp_contains(dst_pte);
+	if (nacre_batch) nacre_ptp_fork_begin(dst_mm, dst_pte);
 	arch_enter_lazy_mmu_mode();
 
 	do {
@@ -1184,6 +1196,7 @@ again:
 			continue;
 		}
 		if (unlikely(!pte_present(ptent))) {
+			if (nacre_batch) nacre_ptp_fork_flush();
 			ret = copy_nonpresent_pte(dst_mm, src_mm,
 						  dst_pte, src_pte,
 						  dst_vma, src_vma,
@@ -1206,10 +1219,13 @@ again:
 			 */
 			WARN_ON_ONCE(ret != -ENOENT);
 		}
+		/* Flush before a nonbatchable leaf can take an eager-copy path. */
+		if (nacre_batch && (!pte_nacre(ptent) || pte_special(ptent) || pte_protnone(ptent)))
+			nacre_ptp_fork_flush();
 		/* copy_present_ptes() will clear `*prealloc' if consumed */
 		max_nr = (end - addr) / PAGE_SIZE;
 		ret = copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte,
-					ptent, addr, max_nr, rss, &prealloc);
+					ptent, addr, max_nr, rss, &prealloc, nacre_batch);
 		/*
 		 * If we need a pre-allocated page for this pte, drop the
 		 * locks, allocate, and try again.
@@ -1232,6 +1248,7 @@ again:
 	} while (dst_pte += nr, src_pte += nr, addr += PAGE_SIZE * nr,
 		 addr != end);
 
+	if (nacre_batch) nacre_ptp_fork_end();
 	arch_leave_lazy_mmu_mode();
 	pte_unmap_unlock(orig_src_pte, src_ptl);
 	add_mm_rss_vec(dst_mm, rss);
@@ -1546,13 +1563,17 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		struct vm_area_struct *vma, struct folio *folio,
 		struct page *page, pte_t *pte, pte_t ptent, unsigned int nr,
 		unsigned long addr, struct zap_details *details, int *rss,
-		bool *force_flush, bool *force_break)
+		bool *force_flush, bool *force_break, bool cleared)
 {
 	struct mm_struct *mm = tlb->mm;
 	bool delay_rmap = false;
+	BUG_ON(cleared && nr != 1);
 
 	if (!folio_test_anon(folio)) {
-		ptent = get_and_clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
+		if (cleared)
+			page_table_check_pte_clear(mm, ptent);
+		else
+			ptent = get_and_clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 		if (pte_dirty(ptent)) {
 			folio_mark_dirty(folio);
 			if (tlb_delay_rmap(tlb)) {
@@ -1565,7 +1586,10 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		rss[mm_counter(folio)] -= nr;
 	} else {
 		/* We don't need up-to-date accessed/dirty bits. */
-		clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
+		if (cleared)
+			page_table_check_pte_clear(mm, ptent);
+		else
+			clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 		rss[MM_ANONPAGES] -= nr;
 	}
 	/* Checking a single PTE in a batch is sufficient. */
@@ -1807,7 +1831,7 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 			zap_present_folio_ptes(tlb, vma, folio, page,
 					       pte, ptent, 1, addr,
 					       details, rss, force_flush,
-					       force_break);
+					       force_break, false);
 			return 1;
 		}
 		/* We don't need up-to-date accessed/dirty bits. */
@@ -1834,12 +1858,61 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 
 		zap_present_folio_ptes(tlb, vma, folio, page, pte, ptent, nr,
 				       addr, details, rss, force_flush,
-				       force_break);
+				       force_break, false);
 		return nr;
 	}
 	zap_present_folio_ptes(tlb, vma, folio, page, pte, ptent, 1, addr,
-			       details, rss, force_flush, force_break);
+			       details, rss, force_flush, force_break, false);
 	return 1;
+}
+
+/* Clear in M before releasing any Linux protection/rmap/page reference.
+ * Cap the snapshot to the current gather batch: __tlb_remove_folio_pages()
+ * may demand a break only on the final queued page, never halfway through
+ * accounting for an already-cleared snapshot. No new gather allocation needed. */
+static int nacre_zap_private_batch(struct mmu_gather *tlb,
+		struct vm_area_struct *vma, pte_t *pte, unsigned long addr,
+		unsigned long end, struct zap_details *details, int *rss,
+		bool *force_flush, bool *force_break)
+{
+	pte_t old[NACRE_PTP_BATCH_MAX];
+	unsigned short indices[NACRE_PTP_BATCH_MAX];
+	unsigned int count = 0, limit;
+	unsigned long retired;
+
+	if (!nacre_ptp_contains(pte)) return 0;
+	if (tlb->active->nr + 1 >= tlb->active->max)
+		return 0;
+	limit = min_t(unsigned int, NACRE_PTP_BATCH_MAX,
+		      tlb->active->max - tlb->active->nr - 1);
+	limit = min_t(unsigned long, limit, (end - addr) / PAGE_SIZE);
+	limit = min_t(unsigned int, limit, PTRS_PER_PTE - pte_index(addr));
+	for (; count < limit; count++) {
+		struct page *page;
+		struct folio *folio;
+		pte_t value = ptep_get(pte + count);
+		/* Resident PROT_NONE must use the single-PTE path, even without NUMA. */
+		if (!(pte_val(value) & _PAGE_PRESENT) || !pte_nacre(value) || pte_special(value) ||
+		    pte_protnone(value)) break;
+		page = nacre_private_leaf_page(tlb->mm, vma, addr + count * PAGE_SIZE, value, NULL);
+		BUG_ON(!page);
+		folio = page_folio(page);
+		if (folio_test_large(folio) || !should_zap_folio(details, folio)) break;
+		old[count] = value;
+		indices[count] = pte_index(addr) + count;
+	}
+	if (!count) return 0;
+	retired = nacre_ptp_zap_batch(tlb->mm, pte, indices, count);
+	for (unsigned int i = 0; i < count; i++)
+		nacre_private_released(pte_val(old[i]), (retired >> i) & 1);
+	for (unsigned int i = 0; i < count; i++) {
+		struct page *page = pfn_to_page(pte_pfn(old[i]));
+		zap_present_folio_ptes(tlb, vma, page_folio(page), page, pte + i,
+				       old[i], 1, addr + i * PAGE_SIZE, details, rss,
+				       force_flush, force_break, true);
+		BUG_ON(*force_break && i + 1 != count);
+	}
+	return count;
 }
 
 static unsigned long zap_pte_range(struct mmu_gather *tlb,
@@ -1882,13 +1955,16 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 			break;
 
 		if (pte_present(ptent)) {
-	            max_nr = (end - addr) / PAGE_SIZE;
-		            nr = zap_present_ptes(tlb, vma, pte, ptent, max_nr,
-							      addr, details, rss, &force_flush,
-							      &force_break);
-				if (unlikely(force_break)) {
-					addr += nr * PAGE_SIZE;
-					break;
+			max_nr = (end - addr) / PAGE_SIZE;
+			nr = nacre_zap_private_batch(tlb, vma, pte, addr, end,
+						     details, rss, &force_flush, &force_break);
+			if (!nr)
+				nr = zap_present_ptes(tlb, vma, pte, ptent, max_nr,
+						     addr, details, rss, &force_flush,
+						     &force_break);
+			if (unlikely(force_break)) {
+				addr += nr * PAGE_SIZE;
+				break;
 			}
 			continue;
 		}
