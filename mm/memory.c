@@ -1877,42 +1877,56 @@ static int nacre_zap_private_batch(struct mmu_gather *tlb,
 {
 	pte_t old[NACRE_PTP_BATCH_MAX];
 	unsigned short indices[NACRE_PTP_BATCH_MAX];
-	unsigned int count = 0, limit;
+	unsigned int count = 0, max_count, max_span, offset;
+	unsigned int base_idx = pte_index(addr);
 	unsigned long retired;
 
-	if (!nacre_ptp_contains(pte)) return 0;
-	if (tlb->active->nr + 1 >= tlb->active->max)
+	if (!nacre_ptp_contains(pte) || tlb->active->nr + 1 >= tlb->active->max)
 		return 0;
-	limit = min_t(unsigned int, NACRE_PTP_BATCH_MAX,
-		      tlb->active->max - tlb->active->nr - 1);
-	limit = min_t(unsigned long, limit, (end - addr) / PAGE_SIZE);
-	limit = min_t(unsigned int, limit, PTRS_PER_PTE - pte_index(addr));
-	for (; count < limit; count++) {
+	max_count = min_t(unsigned int, NACRE_PTP_BATCH_MAX,
+			  tlb->active->max - tlb->active->nr - 1);
+	max_span = min_t(unsigned long, (end - addr) / PAGE_SIZE,
+			 PTRS_PER_PTE - base_idx);
+	for (offset = 0; offset < max_span && count < max_count; offset++) {
 		struct page *page;
 		struct folio *folio;
-		pte_t value = ptep_get(pte + count);
+		pte_t value = ptep_get(pte + offset);
+
+		if (pte_none(value))
+			continue;
 		/* Resident PROT_NONE must use the single-PTE path, even without NUMA. */
-		if (!(pte_val(value) & _PAGE_PRESENT) || !pte_nacre(value) || pte_special(value) ||
-		    pte_protnone(value)) break;
-		page = nacre_private_leaf_page(tlb->mm, vma, addr + count * PAGE_SIZE, value, NULL);
+		if (!(pte_val(value) & _PAGE_PRESENT) || !pte_nacre(value) ||
+		    pte_special(value) || pte_protnone(value))
+			break;
+		page = nacre_private_leaf_page(tlb->mm, vma,
+				addr + offset * PAGE_SIZE, value, NULL);
 		BUG_ON(!page);
 		folio = page_folio(page);
-		if (folio_test_large(folio) || !should_zap_folio(details, folio)) break;
+		if (folio_test_large(folio) || !should_zap_folio(details, folio))
+			break;
 		old[count] = value;
-		indices[count] = pte_index(addr) + count;
+		indices[count] = base_idx + offset;
+		count++;
 	}
-	if (!count) return 0;
+	if (!count)
+		return 0;
 	retired = nacre_ptp_zap_batch(tlb->mm, pte, indices, count);
 	for (unsigned int i = 0; i < count; i++)
 		nacre_private_released(pte_val(old[i]), (retired >> i) & 1);
 	for (unsigned int i = 0; i < count; i++) {
+		unsigned int off = indices[i] - base_idx;
 		struct page *page = pfn_to_page(pte_pfn(old[i]));
-		zap_present_folio_ptes(tlb, vma, page_folio(page), page, pte + i,
-				       old[i], 1, addr + i * PAGE_SIZE, details, rss,
+		zap_present_folio_ptes(tlb, vma, page_folio(page), page, pte + off,
+				       old[i], 1, addr + (unsigned long)off * PAGE_SIZE,
+				       details, rss,
 				       force_flush, force_break, true);
 		BUG_ON(*force_break && i + 1 != count);
 	}
-	return count;
+	/*
+	 * Every consumed slot is now cleared or was pte_none under ptl.
+	 * Leave the first unsupported or unscanned entry to zap_pte_range().
+	 */
+	return offset;
 }
 
 static unsigned long zap_pte_range(struct mmu_gather *tlb,
