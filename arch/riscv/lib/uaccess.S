@@ -110,12 +110,50 @@ SYM_FUNC_START(fallback_scalar_usercopy)
 	j	.Lbyte_copy_tail
 
 .Lshift_copy:
-	/* Shift-copy reads before/after src; a byte Grant permits neither edge.
-	 * Keep aligned bulk copies and use exact accesses for this unaligned path. */
+	/* A byte Grant requires exact accesses at both source edges. */
 	li t1, TASK_THREAD_NACRE_GRANT_ACTIVE
 	add t1, tp, t1
 	lbu t1, 0(t1)
-	bnez t1, .Lbyte_copy_tail
+	beqz t1, .Lshift_copy_unrestricted
+
+	/* Keep one full word beyond the last aligned destination store. */
+	sub t1, t0, a0
+	li t2, 2*SZREG
+	bltu t1, t2, .Lbyte_copy_tail
+	addi t1, t0, -SZREG
+	andi t1, t1, ~(SZREG-1)
+
+	/* Prime only valid source bytes; a0 stays at the first uncopied byte. */
+	slli t3, a3, 3
+	mv t2, t3
+	li t4, SZREG*8
+	li a5, 0
+.Lgrant_prime:
+	fixup lbu a4, 0(a1), 10f
+	sll a2, a4, t2
+	or a5, a5, a2
+	addi a1, a1, 1
+	addi t2, t2, 8
+	bltu t2, t4, .Lgrant_prime
+	sub t4, t4, t3
+.Lgrant_shift:
+	/* a1 is aligned and the next word ends strictly before src_end. */
+	fixup REG_L a6, 0(a1), 10f
+	srl a4, a5, t3
+	sll a2, a6, t4
+	or a4, a4, a2
+	fixup REG_S a4, 0(a0), 10f
+	mv a5, a6
+	addi a1, a1, SZREG
+	addi a0, a0, SZREG
+	bltu a0, t1, .Lgrant_shift
+
+	/* Restore the exact next source byte for the bounded byte tail. */
+	addi a1, a1, -SZREG
+	add a1, a1, a3
+	j .Lbyte_copy_tail
+
+.Lshift_copy_unrestricted:
 
 	/*
 	 * Word copy with shifting.
