@@ -1700,8 +1700,10 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 
-	if (current->thread.nacre_flag == NACRE_HANDOFF)
-        nacre_mm_init(mm, true);
+	if (current->thread.nacre_flag == NACRE_HANDOFF) {
+        err = nacre_mm_init(mm, true);
+        if (err) goto free_pt;
+    }
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;

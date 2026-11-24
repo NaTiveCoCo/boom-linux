@@ -39,7 +39,7 @@ void nacre_private_claim(struct mm_struct *mm, void *slot, unsigned long value,
 
 bool nacre_mm_private(struct mm_struct *mm);
 bool nacre_mm_managed(struct mm_struct *mm);
-void nacre_mm_init(struct mm_struct *mm, bool fork);
+int nacre_mm_init(struct mm_struct *mm, bool fork);
 void nacre_mm_discard(struct mm_struct *mm);
 void nacre_root_retire(struct mm_struct *mm);
 unsigned long nacre_root_entry(struct mm_struct *mm, unsigned long addr);

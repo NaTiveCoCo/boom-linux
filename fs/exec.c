@@ -390,7 +390,9 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 		goto err;
 
 #ifdef CONFIG_RISCV
-	nacre_mm_init(mm, false);
+	err = nacre_mm_init(mm, false);
+	if (err)
+		goto err;
 #endif
 
 	/* Save current stack limit for all calculations made during exec. */

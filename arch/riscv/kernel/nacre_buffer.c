@@ -229,7 +229,7 @@ int nacre_bind_initial(unsigned long buffer, unsigned long capacity)
     ret = sbi_ecall(NACRE_SBI_REGISTER_EXT, 19, __pa(snapshot),
                     buffer, capacity, task_pid_vnr(current), (unsigned long)VDSO_SYMBOL(mm->context.vdso, rt_sigreturn), buffer_pages * PAGE_SIZE);
     kfree(snapshot);
-    return ret.error ? -EACCES : 0;
+    return ret.error ? (ret.error == SBI_ERR_NO_SHMEM ? -ENOMEM : -EACCES) : 0;
 }
 
 int nacre_buffer_fork_prepare(struct mm_struct *mm, unsigned long *address, unsigned long *capacity)

@@ -54,10 +54,10 @@ static noinline void nacre_mm_started(void)
     asm volatile("nop" ::: "memory");
 }
 
-void nacre_mm_init(struct mm_struct *mm, bool fork)
+int nacre_mm_init(struct mm_struct *mm, bool fork)
 {
 	if (current->thread.nacre_flag == NACRE_IDLE)
-		return;
+		return 0;
 	BUG_ON((current->thread.nacre_flag != NACRE_REQUESTED && current->thread.nacre_flag != NACRE_HANDOFF) || mm == current->mm ||
 	       mm->context.nacre_cid ||
 	       !current->thread.nacre_cid || (csr_read(CSR_SATP) >> 60) != 8);
@@ -68,7 +68,15 @@ void nacre_mm_init(struct mm_struct *mm, bool fork)
 		BUG_ON(!pool_base || pool_end <= pool_base ||
 		       (pool_base | pool_end) & (PAGE_SIZE - 1));
 	}
-	/* The target mm selects PTP services; M learns its root at allocation. */
+	/* Admit an independent empty root before any ELF/stack PTP allocation. */
+	if (current->thread.nacre_flag == NACRE_REQUESTED) {
+		struct sbiret ret = sbi_ecall(NACRE_SBI_REGISTER_EXT,
+			NACRE_CONTAINER_ADMIT, __pa(mm->pgd),
+			current->thread.nacre_cid, 0, 0, 0, 0);
+		if (ret.error == SBI_ERR_NO_SHMEM)
+			return -ENOMEM;
+		BUG_ON(ret.error);
+	}
 	mm->context.nacre_cid = current->thread.nacre_cid;
     if (current->thread.nacre_flag == NACRE_HANDOFF) {
         BUG_ON(sbi_ecall(NACRE_SBI_REGISTER_EXT, fork ? 0x40 : 0x43,
@@ -77,6 +85,7 @@ void nacre_mm_init(struct mm_struct *mm, bool fork)
         mm->context.nacre_private = fork;
     }
     nacre_mm_started();
+    return 0;
 }
 
 void nacre_mm_discard(struct mm_struct *mm)
